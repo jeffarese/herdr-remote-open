@@ -1,0 +1,118 @@
+#!/bin/sh
+# herdr-open: open a link or a file on the Mac whose Herdr window you're using.
+#
+#   herdr-open URL|FILE
+#
+# Installed by herdr-remote-open on machines Herdr reaches over ssh. In Herdr terminals BROWSER
+# points here, and on Linux it also answers as xdg-open. It puts the request on this terminal
+# as a label; the Herdr window used last takes it and opens it on its Mac: a page in the
+# browser, with localhost ports and sign-in callbacks forwarded back here over ssh; an image in
+# a floating Herdr viewer; a PDF or text file in its app.
+#
+# Outside a Herdr terminal, or when no window takes it within 3 seconds, the same argument goes
+# to this machine's own opener (open on macOS, the next xdg-open on PATH on Linux), or, with
+# none, it says where to open it and exits 3.
+set -u
+
+# Where this script really is, through any links (~/.local/bin/herdr-open, xdg-open), so the
+# fallback never picks this folder's xdg-open, which is this script again.
+self=$0
+case $self in */*) ;; *) self=$(command -v "$self" 2>/dev/null || echo "$self") ;; esac
+n=0
+while [ -L "$self" ] && [ "$n" -lt 8 ]; do
+  to=$(readlink "$self") || break
+  case $to in /*) self=$to ;; *) self=$(dirname -- "$self")/$to ;; esac
+  n=$((n + 1))
+done
+self_dir=$(CDPATH='' cd -- "$(dirname -- "$self")" 2>/dev/null && pwd -P)
+
+fallback() {
+  # HERDR_OPEN_OPENER: the opener to fall back to instead (the tests use it).
+  if [ -n "${HERDR_OPEN_OPENER:-}" ]; then exec "$HERDR_OPEN_OPENER" "$@"; fi
+  if [ "$(uname -s)" = Darwin ]; then exec /usr/bin/open "$@"; fi
+  old_ifs=$IFS
+  IFS=:
+  for dir in $PATH; do
+    [ -n "$dir" ] || continue
+    real=$(CDPATH='' cd -- "$dir" 2>/dev/null && pwd -P) || continue
+    [ "$real" = "$self_dir" ] && continue
+    if [ -x "$dir/xdg-open" ]; then
+      IFS=$old_ifs
+      exec "$dir/xdg-open" "$@"
+    fi
+  done
+  IFS=$old_ifs
+  printf 'herdr-open: no Herdr window took this and there is no browser here. Open it yourself:\n  %s\n' "$*" >&2
+  exit 3
+}
+
+[ $# -eq 1 ] || fallback "$@"
+arg=$1
+[ -n "${HC_TERMINAL_ID:-}" ] || fallback "$arg"
+hc=${HERDR_OPEN_HC:-}
+[ -n "$hc" ] || hc=$(command -v hc 2>/dev/null) || hc=
+[ -n "$hc" ] || hc=$HOME/.local/bin/hc
+[ -x "$hc" ] || fallback "$arg"
+
+# Nothing with control characters goes into a label.
+nl='
+'
+case $arg in *"$nl"* | *[[:cntrl:]]*) fallback "$arg" ;; esac
+case $PWD in *"$nl"* | *[[:cntrl:]]*) fallback "$arg" ;; esac
+
+case $arg in
+  http://* | https://* | HTTP://* | HTTPS://* | file://*) ;;
+  -*) fallback "$arg" ;;
+  *:*)
+    # Another scheme (mailto:, vscode:) stays with this machine; a file name with a colon doesn't.
+    case $arg in /*) ;; *) [ -e "$arg" ] || fallback "$arg" ;; esac
+    ;;
+esac
+case $arg in
+  *://*) ;;
+  /*) [ -f "$arg" ] || fallback "$arg" ;;
+  *) [ -f "$arg" ] || fallback "$arg"; arg=$PWD/$arg ;;
+esac
+
+# JSON string escaping. LC_ALL=C: a file name that isn't UTF-8 must not stop sed.
+json() { printf '%s' "$1" | LC_ALL=C sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+id=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+[ -n "$id" ] || fallback "$arg"
+now=$(($(date +%s) * 1000))
+req=$(printf '{"v":1,"id":"%s","t":%s,"arg":"%s","cwd":"%s"}' "$id" "$now" "$(json "$arg")" "$(json "$PWD")")
+
+# Every label this request uses has its id in the key, so two at once never meet:
+#   remote-open.req.<id>        the request
+#   remote-open.bid.<id>.<mac>  each Herdr window's bid
+#   remote-open.ack.<id>        the Mac that took it, or "-" once this gave up
+labels() { "$hc" get "$HC_TERMINAL_ID" --json 2>/dev/null; }
+acked() { labels | grep -Eo "\"remote-open\\.ack\\.$id\": ?\"[^\"]*\"" | sed 's/.*"\([^"]*\)"$/\1/'; }
+# Takes the request and the bids off again, plus any labels given.
+clear_() {
+  bids=$(labels | grep -o "\"remote-open\\.bid\\.$id\\.[A-Za-z0-9_-]*\"" | tr -d '"' | sed 's/$/=/' | sort -u)
+  # shellcheck disable=SC2086 # one bid key per word
+  "$hc" label "$HC_TERMINAL_ID" "remote-open.req.$id=" $bids "$@" >/dev/null 2>&1
+}
+
+"$hc" label "$HC_TERMINAL_ID" "remote-open.req.$id=$req" >/dev/null 2>&1 || fallback "$arg"
+trap 'clear_ "remote-open.ack.$id="; exit 130' INT TERM HUP
+
+tries=${HERDR_OPEN_TRIES:-15}
+i=0
+while [ "$i" -lt "$tries" ]; do
+  sleep 0.2
+  a=$(acked)
+  # Taken: the ack stays, since that Mac reads it back before it opens anything.
+  if [ -n "$a" ] && [ "$a" != - ]; then clear_; exit 0; fi
+  i=$((i + 1))
+done
+
+# Nobody took it in time. Say so on the ack, which keeps the last write, then read it back: a
+# Mac that acked in the same moment either sees "-" and stands down, or wins and opens it.
+"$hc" label "$HC_TERMINAL_ID" "remote-open.ack.$id=-" >/dev/null 2>&1
+sleep 0.5
+a=$(acked)
+if [ -n "$a" ] && [ "$a" != - ]; then clear_; exit 0; fi
+trap - INT TERM HUP
+clear_ "remote-open.ack.$id="
+fallback "$arg"

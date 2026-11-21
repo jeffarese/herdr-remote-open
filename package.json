@@ -1,0 +1,21 @@
+{
+  "name": "herdr-remote-open",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A Herdr app mod: links, sign-ins and images that programs on other machines open come up on the Mac you're using, with localhost ports forwarded over ssh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jeffarese/herdr-remote-open.git"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "test": "node --import ./tests/stubs/loader.mjs --test tests/*.test.mjs",
+    "lint": "shellcheck install.sh remote/herdr-open remote/setup.sh scripts/machines.sh docs/demo/*.sh && herdr-app check mods/remote-open",
+    "demo": "sh docs/demo/record.sh",
+    "check": "npm run lint && npm test"
+  }
+}
