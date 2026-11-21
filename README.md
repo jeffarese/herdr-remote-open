@@ -30,7 +30,7 @@ a pretend machine on the same Mac, and every session in them is made up
 | A program opens an image: `png jpg jpeg gif webp bmp svg` | Copies it here and shows it in a floating viewer |
 | A program opens a markdown file: `md markdown` | Copies it here and shows it rendered in a floating viewer |
 | A program opens a PDF or a text file: `pdf txt csv json log` | Copies it here and opens it in its Mac app |
-| You right-click the terminal | The menu offers the last images and markdown files it printed, one click to view |
+| You right-click the terminal | The menu offers the last images and markdown files it printed, one click to view, and **All images…** for every one as tiles |
 
 ## Contents
 
@@ -107,8 +107,15 @@ herdr-open http://localhost:5173
 
 **See an image.** A program that opens an image (`xdg-open chart.png`, Python's `webbrowser`, or
 `herdr-open chart.png`) shows it in the floating viewer. For one a program only printed, right-click
-the terminal: the menu lists up to five images and markdown files on its screen that exist on that
-machine, macOS screenshots with spaces in their names too.
+the terminal: the menu lists the four newest images and markdown files on its screen that exist on
+that machine, macOS screenshots with spaces in their names too. In a pane that sends right-clicks
+to its program, as Claude Code's fullscreen view does, Shift+right-click.
+
+**See them all.** The menu's **All images…** shows how many the screen has and opens a window of
+tiles: every image and markdown file the terminal printed, in the order it printed them. It shows
+the screen's at once, then adds the ones further back in a shell's history. Click a tile to open
+it in the viewer, then ← and → step through the rest. The key command `remote-open:gallery` opens
+it for the focused terminal, without the menu.
 
 **Read a markdown file.** The same goes for `.md` and `.markdown`: an agent's `Write(…/notes.md)`
 on screen is one right-click away. It opens rendered in its own floating window, with text you
@@ -131,10 +138,12 @@ size in pixels.
 | Copy | Put the image on the clipboard, to paste into Slack, Mail, Notes |
 | Save | Copy it to `~/Downloads`, as `shot (2).png` when the name is taken; never replaces a file |
 | Open | Open it in its Mac app, usually Preview, to annotate or crop |
+| ‹ › (← →) | The gallery's previous or next image, when opened from the gallery |
 | × (Esc) | Close it |
 
 A new image replaces the one shown. Key commands, for `keys.json`: `remote-open:close`,
-`remote-open:fit` (or `herdr-app do remote-open.close`).
+`remote-open:fit`, `remote-open:gallery` (or `herdr-app do remote-open.close`;
+`herdr-app do remote-open.gallery:t7` opens t7's gallery).
 
 **Forwards.** While a port is forwarded, a chip floats at the bottom of the window:
 `⇄ :8085 studio`, or `⇄ 3 forwards`. Click it to see each one with its time left, open it, or stop
@@ -188,7 +197,9 @@ which needs no ssh of its own; bigger ones through `scp`, up to 100 MB. Copies l
 `~/.config/herdr-app/data/remote-open/cache`, named by time, a hash of machine and path, and a
 cleaned file name, are marked with macOS's quarantine flag like a browser download, and are deleted
 after 3 days. Herdr draws the image from there; one over 16,384 pixels a side opens in its Mac app
-instead.
+instead. The gallery's tiles are small copies `sips` makes there, at most 480 pixels a side, so the
+window never holds twenty full-size screenshots. From another machine the full copy goes again once
+its tile is made.
 
 ## Troubleshooting
 
@@ -200,7 +211,9 @@ instead.
 | **Port … is already in use on this Mac** | Something here listens on that port, so the redirect would reach it. Stop it and open the link again. |
 | **… forwards to studio. Stop that forward first.** | The same port is forwarded from another machine. Stop it from the chip. |
 | **… has no ssh address in Herdr** | The machine is reached through `--via`, so there's no ssh target to forward with. Pages open without a forward. |
-| The right-click menu has no images or markdown files | Only paths on the terminal's screen count, not ones that scrolled off it, and only files that exist on that machine. For an older one, run `herdr-open <path>` there. Agents' collapsed tool output isn't on screen. |
+| The right-click menu has no images or markdown files | Only paths on the terminal's screen count, and only files that exist on that machine. **All images…** also looks back through a shell's history, but a fullscreen program such as Claude Code keeps none, so scroll its view to the paths first. For an older one, run `herdr-open <path>` there. Agents' collapsed tool output isn't on screen. |
+| A plain right-click in a Claude Code pane shows Claude's menu | Its fullscreen view takes the mouse. Shift+right-click, or bind `remote-open:gallery` to a key. |
+| The gallery's tiles stay empty | Herdr doesn't draw newly loaded pictures while the Mac's screen is locked. They show once it's unlocked. |
 | **… has a herdr-open marker line without its pair** | Someone edited the block in that shell file. Fix or delete it by hand, then run the install again. |
 
 ## Limits
@@ -218,7 +231,7 @@ instead.
 - A sign-in counts only when its redirect is in a parameter made for it (`redirect_uri`,
   `callback`, `return_to` and the like, or nested a level down in `continue` or `next`).
 - One image viewer and one markdown viewer at a time.
-- macOS only on this side: it uses `ioreg`, `osascript`, `open`. The other machine can be anything
+- macOS only on this side: it uses `ioreg`, `osascript`, `open`, `sips`. The other machine can be anything
   with `sh`, `base64` and Herdr's `hc`.
 
 ## Security

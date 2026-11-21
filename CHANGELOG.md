@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **All images.** The right-click menu has an **All images…** row with how many images and
+  markdown files the terminal's screen shows. It opens a window of tiles of every one, in the
+  order printed, adding the ones further back in a shell's history. A tile opens the viewer, and
+  ← → step through the rest. The key command `remote-open:gallery` opens it for the focused
+  terminal. The tiles are small copies made with `sips`. The menu itself now lists four files.
 - Markdown files open rendered in their own floating viewer, with selectable text, Copy (the
   source), Save to Downloads and Open in its app; web links open in the browser. The right-click
   menu lists `.md` and `.markdown` paths on the terminal's screen beside images. Before, a

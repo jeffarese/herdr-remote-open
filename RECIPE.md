@@ -4,7 +4,7 @@ Pages, sign-ins and images that programs on the person's other machines open com
 they're using. A sign-in whose callback is on that machine's localhost gets its port forwarded
 back over ssh, so it finishes there. A localhost dev server opens here the same way. An image
 shows in a floating Herdr window, and the terminal's right-click menu offers the images the
-terminal printed. Nothing shows until a port is forwarded; then a small chip floats at the bottom
+terminal printed, and a gallery of all of them. Nothing shows until a port is forwarded; then a small chip floats at the bottom
 of the window.
 
 ![Remote open](preview.png)
@@ -13,7 +13,7 @@ of the window.
 
 Every color comes from `theme()`. Icons are 24-unit stroke SVGs (lucide style, 2 px,
 `currentColor`) in the mod's folder: `image`, `forward`, `x`, `copy`, `download`, `external`,
-`fit`. The menu's pane items reuse the shipped `mods/workspace-chrome/` icons (`panel-right`,
+`fit`, `gallery` (lucide `images`), `prev`, `next` (chevrons), `refresh` (lucide `rotate-cw`). The menu's pane items reuse the shipped `mods/workspace-chrome/` icons (`panel-right`,
 `square`, `terminal`, `x`).
 
 - **Nothing**, while no port is forwarded: the floating block draws an empty `div`.
@@ -30,10 +30,12 @@ Every color comes from `theme()`. Icons are 24-unit stroke SVGs (lucide style, 2
   380 × 240, plus the bar):
   - A 36 px title bar with a `border` line under it, 12 px left padding: the `image` icon
     (`muted`), the file's name (semibold, never truncated), then in 11.5 px `dim`, truncated,
-    `studio · 1200×700` (`this Mac` for a local terminal; the full remote path in its tooltip).
+    `studio · 1200×700` (`this Mac` for a local terminal; the full remote path in its tooltip),
+    plus ` · 3 of 22` when opened from the gallery.
     A note replaces that text for 2.5 s after a button (`Copied to the clipboard`,
     `Saved to Downloads as shot (2).png`).
-  - At the right, 24 px buttons, radius 6, `muted`, `hover` + `foreground` on hover: **1:1** as
+  - At the right, 24 px buttons, radius 6, `muted`, `hover` + `foreground` on hover: from the
+    gallery only, **prev** and **next** (tooltips "Previous image (←)", "Next image (→)"); **1:1** as
     a text label while fitted, the `fit` icon at actual size; **copy**; **download**
     (Save to Downloads); **external** (Open in its app); **x** (Close).
   - The body on `canvas` (falling back to `background`), 8 px padding, the image centred: fitted
@@ -47,13 +49,30 @@ Every color comes from `theme()`. Icons are 24-unit stroke SVGs (lucide style, 2
   12.8 px type. 31 px rows, radius 7, 8 px padding, 9 px gap: a 14 px icon (`muted`), the label
   (truncated, tooltip), the key in 11 px `dim` at the right. The selected row (arrow keys) on
   `selected`, hovered rows on `hover`, 1 px `border` rules between groups:
-  - up to five images and markdown files, newest first, `Open chart.png`, the `image` or
+  - up to four images and markdown files, newest first, `Open chart.png`, the `image` or
     `markdown` icon, tooltip `machine: path`;
+  - **All images…** with the `gallery` icon and, as its key, how many the screen shows (`22`;
+    nothing for none). Tooltip "Every image and markdown file this terminal printed". There for
+    every terminal, since history can hold some the screen doesn't;
   - Herdr's own pane items, as the shipped menu has them: Split right, Split down, Zoom, then
     "Send right-clicks to pane" (or "Use Herdr right-click menu"), "Send back to <parent>" for a
     parked terminal, and after a rule Close pane. Split, Zoom and Close only for a terminal in a
     tab.
   - A row that is copying a file pulses (opacity 0.45 to 1, 900 ms).
+- **Gallery** (a floating window, 884 × 620): the viewer's title bar with the `gallery` icon,
+  **All images** (semibold), then in `dim` the terminal's title (or name, or address) and machine,
+  `· 4 images, 1 markdown file` (`· looking…` first, `· looking further back…` while history
+  loads, `· none` when done empty), with the **refresh** ("Look again") and **x** buttons. The
+  body on `canvas`, scrolling down, 10 px padding, tiles wrapping with an 8 px gap:
+  - a tile is 196 px wide, 6 px padding, radius 8, `hover` behind it, its path as tooltip: a
+    124 px picture box on `background`, radius 6, with the picture fitted inside it (never
+    enlarged), then the file name in 11.5 px, truncated;
+  - before its picture is made the box shows the `image` icon (22 px, `dim`) pulsing (0.4 to 1,
+    1100 ms); a markdown file shows the `markdown` icon; a picture that couldn't be made shows
+    `x`, with the reason under the path in the tooltip;
+  - a tile opening its file pulses like a menu row;
+  - with nothing found: "This terminal hasn't printed the path of an image or markdown file
+    that's still there." in 12.5 px `dim`.
 
 ## How it behaves
 
@@ -135,6 +154,9 @@ answered, for as long as their label stays.
   SOF, SVG `width`/`height`/`viewBox`).
 
 **Viewer.**
+- From the gallery, ← and → (and the buttons) open the previous or next of the gallery's images
+  in the viewer's place, with the list in its props (`set: {paths, at}`); nothing past either
+  end, and one at a time.
 - Esc closes it; Space or F switches between fit and 1:1. Key commands `close` and `fit`
   (`nextCommand()`) do the same.
 - Copy runs JXA `osascript` putting an `NSImage` on the general pasteboard.
@@ -151,12 +173,35 @@ answered, for as long as their label stays.
   bare match with spaces before it back to a word that starts with `/` or `~/` (a macOS
   screenshot's `…/Screenshot 2026-09-22 at 20.12.45.png`, printed unquoted) is offered whole as
   well, first.
-- It checks the newest sixteen on that machine with one `/bin/sh` test, `~` and relative paths
-  resolved against the terminal's cwd, and keeps five: the ones that are files.
+- It checks them on that machine with one `/bin/sh` test, `~` and relative paths resolved
+  against the terminal's cwd, at most 120 of the newest, and keeps the files. The four newest
+  get rows; the count goes on **All images…**.
 - Choosing an image hands the job to the watcher's inbox and closes the menu at once. A closed
   menu would drop a copy halfway. With no live watcher it copies the file itself and closes after.
 - Pane items run the same commands as the shipped menu, with `target.pane` / `target.terminal`.
   Hints come from `keys()`. Up/Down/Enter/Esc work.
+- **All images…** closes the menu and opens the gallery with `{view:"gallery", terminal, cwd}`.
+
+**Gallery.**
+- Opened by the menu row, or by the watcher's key command: `gallery` for the focused terminal
+  (`focused().shown`, else `.terminal`), `gallery:<address>` for that one. Only the watcher on
+  duty answers; an unknown terminal gets an error toast. `openOverlay({kind:"window",
+  key:"remote-open-gallery"})`, so opening another replaces it.
+- It finds files as the menu does, up to 120, and shows them in the order printed. Then it reads
+  3000 lines of history (`hc read --lines 3000`, seconds for the terminal on screen) and adds
+  what that finds before them. Tiles already there keep their pictures; ones the second read
+  missed stay at the end. A program on the alternate screen, like Claude Code's fullscreen view,
+  has no history, so the screen is all there is.
+- Each image's picture, four at a time: `sips -Z 480 -s format png <file> --out
+  <cache>/<cache name>.thumb.png`, straight from the file for a local terminal. From another
+  machine the file is copied first, as for the viewer, and that copy is deleted once the picture
+  is made; the picture gets the quarantine flag. An SVG is drawn as it is. The picture's size
+  comes from its header.
+- A tile opens its file with the same `openFile` as the viewer, from the gallery's own copy
+  (the window stays open, so nothing is dropped). An image passes the gallery's images as
+  `set`. One at a time.
+- **refresh** starts again from nothing; a read still running from before is ignored. Esc, and
+  the key command `close-gallery`, close it. Closing drops the pictures still being made.
 
 ## Built from
 
@@ -168,19 +213,20 @@ answered, for as long as their label stays.
 - **One mod, roles by `props()`:**
   - `{view:"image"}`: the viewer;
   - `{view:"markdown"}`: the markdown viewer;
+  - `{view:"gallery"}`: the gallery;
   - `{view:"forwards"}`, or any copy with an `overlay` and no `tab` (`mod.open`): the forwards
     list;
   - `{tab:"pane"}`: the terminal menu;
   - any other `tab`: closes itself;
-  - none: the watcher.
+  - none: the watcher, which also takes the key command `gallery`.
 - **Files:** `model.js` (pure: request parsing, loopback and sign-in detection, bids, base64,
   image headers, path finding, cache names), `host.js` (`exec`, `hc`, `fs/promises`, `net`), `views.js`,
   `main.js`.
 - **herdr:** `terminals`, `panes`, `keys`, `props`, `window`, `run`, `hc`, `exec`, `notify`,
-  `openOverlay`, `closeOverlay`, `nextCommand`, `checking`, `appHome`, `home`, `theme`.
+  `openOverlay`, `closeOverlay`, `nextCommand`, `focused`, `checking`, `appHome`, `home`, `theme`.
   `cx.open_url`, `cx.spawn`, `cx.sleep`, `cx.timer.every`, `cx.focus_handle`.
 - **Commands it runs here:** `ssh`, `scp`, `ioreg`, `hostname -s`, `osascript`, `open`, `cp`,
-  `test`, `xattr`, `/bin/sh -c` (size check). Through `hc exec --on`: `/bin/sh -c` scripts for the
+  `test`, `xattr`, `sips` (the gallery's pictures), `/bin/sh -c` (size check). Through `hc exec --on`: `/bin/sh -c` scripts for the
   size check, `base64` and the menu's existence check. `hc get` and `hc label` for the election.
 - **On the other machines:** `remote/herdr-open` (POSIX sh: `od`, `grep`, `hc label`, `hc get`)
   in `~/.local/share/herdr-open/bin`, and a marked block in one shell startup file that sets
@@ -210,6 +256,15 @@ answered, for as long as their label stays.
 - **`exec` output is capped at 8 MiB**, which is why base64 is only used up to 5 MiB.
 - **`image(path)` resolves against `appHome()`**, so the viewer is given
   `data/remote-open/cache/<name>`, not an absolute path.
+- **Pictures don't show while the Mac's screen is locked.** Herdr keeps drawing the window, but a
+  picture it hasn't loaded before stays blank until the screen is unlocked; ones it has drawn
+  before show. Check the lock (`ioreg -n Root -d1 -a`, `CGSSessionScreenIsLocked`) before
+  debugging an empty image, and take pictures of the gallery unlocked.
+- **Don't let the gallery decode full images.** Twenty retina screenshots are hundreds of MB once
+  decoded; the tiles get `sips` copies instead.
+- **A copy waiting on `nextCommand()` never settles.** The tests' `settle()` gives each round
+  20 ms rather than waiting for every task, and commands sent back to back need a settle between
+  them, or the second finds no copy listening.
 - **`closeOverlay(null)` throws** in `checking()`; guard it, and don't spawn timers or `exec`
   there.
 - **`hc get --json` may put a space after a colon**; herdr-open's ack grep allows for it.
