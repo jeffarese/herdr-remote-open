@@ -196,3 +196,26 @@ test("UTF-8 decodes, with a replacement for what isn't UTF-8", () => {
   assert.equal(m.decodeUtf8([0x41, 0xff, 0x42, 0xc3]), "A\ufffdB\ufffd");
   assert.equal(m.decodeUtf8([0xed, 0xa0, 0x80]), "\ufffd\ufffd\ufffd", "no lone surrogates");
 });
+
+test("each runs every item, at most so many at a time", async () => {
+  let now = 0;
+  let most = 0;
+  const seen = [];
+  await m.each([1, 2, 3, 4, 5, 6, 7], 3, async (x, i) => {
+    most = Math.max(most, ++now);
+    await new Promise((r) => setTimeout(r, 2));
+    seen.push([x, i]);
+    now--;
+  });
+  assert.equal(most, 3);
+  assert.deepEqual(seen.map(([x]) => x).sort(), [1, 2, 3, 4, 5, 6, 7]);
+  await m.each([], 4, async () => assert.fail("nothing to run"));
+});
+
+test("the gallery counts images and markdown files apart", () => {
+  assert.equal(m.galleryCount([]), "");
+  assert.equal(m.galleryCount([{ kind: "image" }]), "1 image");
+  assert.equal(m.galleryCount([{ kind: "image" }, { kind: "image" }, { kind: "markdown" }]), "2 images, 1 markdown file");
+  assert.equal(m.galleryCount([{ kind: "markdown" }, { kind: "markdown" }]), "2 markdown files");
+  assert.equal(m.thumbName(null, "/tmp/My Shot.png", 0), `0-${m.cacheName(null, "/tmp/My Shot.png", 0).split("-")[1]}-My_Shot.png.thumb.png`);
+});

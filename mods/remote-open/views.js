@@ -1,4 +1,4 @@
-// What remote-open draws: the floating image and markdown viewers, the terminal right-click menu
+// What remote-open draws: the floating image and markdown viewers, the gallery, the terminal right-click menu
 // (Herdr's pane items plus the images and markdown files the terminal printed), the forwards
 // chip and its list. Each view
 // takes a `ui` with the copy's state and its actions, so tests can draw them without Herdr.
@@ -46,6 +46,8 @@ export function viewer(ui) {
   const p = ui.props;
   const from = p.machine ?? "this Mac";
   const natural = p.w > 0 && p.h > 0 ? { w: p.w, h: p.h } : null;
+  // Opened from the gallery: the images it showed, to step through.
+  const set = Array.isArray(p.set?.paths) && p.set.paths.length > 1 && Number.isInteger(p.set.at) ? p.set : null;
   let pic = image(p.file);
   if (ui.fit) {
     const room = ui.body ? fit(natural?.w ?? 0, natural?.h ?? 0, ui.body.width - 16, ui.body.height - 16) : null;
@@ -71,7 +73,12 @@ export function viewer(ui) {
         .gap(6)
         .items_baseline()
         .child(div().flex_shrink_0().font_semibold().whitespace_nowrap().child(p.name))
-        .child(div().min_w(0).truncate().text_size(11.5).text_color(t.dim).tooltip(p.path).child(ui.note ?? `${from}${natural ? ` · ${natural.w}×${natural.h}` : ""}`)),
+        .child(div().min_w(0).truncate().text_size(11.5).text_color(t.dim).tooltip(p.path).child(ui.note ?? `${from}${natural ? ` · ${natural.w}×${natural.h}` : ""}${set ? ` · ${set.at + 1} of ${set.paths.length}` : ""}`)),
+    )
+    .when(Boolean(set), (el) =>
+      el
+        .child(button(t, "ro-prev", "prev", "Previous image (←)", (cx) => ui.act.step(-1, cx)))
+        .child(button(t, "ro-next", "next", "Next image (→)", (cx) => ui.act.step(1, cx))),
     )
     .child(button(t, "ro-fit", ui.fit ? null : "fit", ui.fit ? "Actual size (1:1)" : "Fit to the window", (cx) => ui.act.toggleFit(cx), ui.fit ? "1:1" : null))
     .child(button(t, "ro-copy", "copy", "Copy image", (cx) => ui.act.copy(cx)))
@@ -199,6 +206,104 @@ export function menu(ui) {
       ),
     )
     .when(Boolean(ui.note), (el) => el.child(div().px(8).py(6).text_size(11.5).text_color(t.dim).child(ui.note)));
+}
+
+// ---------------------------------------------------------------------------
+// The gallery: a window of tiles, one per image or markdown file the terminal printed, in the
+// order they were printed. A tile opens its file in the viewer.
+
+export const TILE_W = 196;
+export const TILE_PIC_H = 124;
+
+function tile(t, it, i, ui) {
+  const room = it.thumb ? fit(it.w, it.h, TILE_W - 12, TILE_PIC_H) : null;
+  const pic = it.thumb
+    ? image(it.thumb).w(room.w).h(room.h).flex_none()
+    : svg(icon(it.kind === "markdown" ? "markdown" : it.state === "failed" ? "x" : "image"))
+        .size(22)
+        .text_color(t.dim)
+        .when(it.state === "wait", (el) => el.loop("opacity", { from: 0.4, to: 1, period: 1100 }));
+  return stop(
+    v_flex()
+      .id(`gt-${i}`)
+      .w(TILE_W)
+      .flex_none()
+      .p(6)
+      .gap(5)
+      .rounded(8)
+      .cursor_pointer()
+      .hover((s) => s.bg(t.hover))
+      .when(it.busy, (el) => el.loop("opacity", { from: 0.45, to: 1, period: 900 }))
+      .tooltip(it.state === "failed" ? `${it.path}\n${it.why ?? "Couldn't make a preview."}` : it.path)
+      .accessibility_label(`Open ${it.name}`)
+      .role("button")
+      .on_click((_e, cx) => ui.act.open(i, cx)),
+  )
+    .child(
+      h_flex()
+        .id(`gp-${i}`)
+        .h(TILE_PIC_H)
+        .w_full()
+        .rounded(6)
+        .bg(t.background)
+        .items_center()
+        .justify_center()
+        .child(pic),
+    )
+    .child(div().w_full().truncate().px(2).text_size(11.5).text_color(t.foreground).child(it.name));
+}
+
+export function gallery(ui) {
+  const t = theme();
+  const tiles = ui.tiles;
+  const bar = h_flex()
+    .id("ro-bar")
+    .h(ui.barHeight)
+    .flex_none()
+    .w_full()
+    .pl(12)
+    .pr(6)
+    .gap(4)
+    .items_center()
+    .border_b(1)
+    .border_color(t.border)
+    .child(svg(icon("gallery")).size(14).flex_none().text_color(t.muted))
+    .child(
+      h_flex()
+        .flex_1()
+        .min_w(0)
+        .gap(6)
+        .items_baseline()
+        .child(div().flex_shrink_0().font_semibold().whitespace_nowrap().child("All images"))
+        .child(div().min_w(0).truncate().text_size(11.5).text_color(t.dim).tooltip(ui.from).child(ui.status)),
+    )
+    .child(button(t, "ro-reload", "refresh", "Look again", (cx) => ui.act.reload(cx)))
+    .child(button(t, "ro-close", "x", "Close (Esc)", (cx) => ui.act.close(cx)));
+
+  const body = stop(
+    div()
+      .id("ro-gallery-body")
+      .flex_1()
+      .min_h(0)
+      .w_full()
+      .overflow_y_scroll()
+      .bg(t.canvas ?? t.background),
+  ).child(
+    tiles.length
+      ? h_flex().w_full().flex_wrap().items_start().gap(8).p(10).children(tiles.map((it, i) => tile(t, it, i, ui)))
+      : div().p(18).text_size(12.5).text_color(t.dim).child(ui.empty ?? ""),
+  );
+
+  return v_flex()
+    .id("ro-gallery")
+    .size_full()
+    .bg(t.background)
+    .text_color(t.foreground)
+    .text_size(12.5)
+    .track_focus(ui.handle)
+    .on_key_down((e, cx) => ui.act.key(e, cx))
+    .child(bar)
+    .child(body);
 }
 
 // ---------------------------------------------------------------------------

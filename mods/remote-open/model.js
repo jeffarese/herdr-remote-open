@@ -448,3 +448,39 @@ export function filePaths(text, max = 8) {
 }
 
 export const baseName = (path) => path.split("/").filter(Boolean).pop() ?? path;
+
+// ---------------------------------------------------------------------------
+// The gallery: every image and markdown file a terminal printed, as tiles
+
+// The menu offers this many of the newest itself; the gallery shows up to GALLERY_MAX.
+export const MENU_FILES = 4;
+export const GALLERY_MAX = 120;
+// Lines of history the gallery reads above the screen, after showing what's on it.
+export const HISTORY_LINES = 3000;
+// The longest side of a tile's picture: sips makes it, so the window never decodes full images.
+export const THUMB_PX = 480;
+
+// A tile's picture file in the cache, next to the copies.
+export const thumbName = (machine, path, now) => `${cacheName(machine, path, now)}.thumb.png`;
+
+// Runs `fn` on every item, at most `lanes` at a time.
+export async function each(list, lanes, fn) {
+  let next = 0;
+  const lane = async () => {
+    while (next < list.length) {
+      const i = next++;
+      await fn(list[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(lanes, list.length) }, lane));
+}
+
+// What the gallery's title bar says about what it found.
+export function galleryCount(tiles) {
+  const images = tiles.filter((t) => t.kind === "image").length;
+  const notes = tiles.length - images;
+  const parts = [];
+  if (images) parts.push(`${images} image${images === 1 ? "" : "s"}`);
+  if (notes) parts.push(`${notes} markdown file${notes === 1 ? "" : "s"}`);
+  return parts.join(", ");
+}

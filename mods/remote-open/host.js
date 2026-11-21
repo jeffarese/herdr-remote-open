@@ -344,7 +344,9 @@ export async function sweepCache(days = 3) {
 
 // An image or a markdown file opens in Herdr's floating viewer; a PDF or text file in its Mac
 // app. Nothing else is copied here.
-export async function openFile(machine, path) {
+// `extra` goes into the image viewer's props: the gallery passes `set` ({paths, at}), the images
+// the viewer steps through with the arrow keys.
+export async function openFile(machine, path, extra = {}) {
   if (!m.opensHere(path)) throw new Error(`remote-open only opens images, markdown, PDFs and text files, not ${m.baseName(path)}.`);
   const target = machine ? await sshTarget(machine) : null;
   if (m.isMarkdown(path)) {
@@ -378,7 +380,7 @@ export async function openFile(machine, path) {
       key: VIEWER_KEY,
       width,
       height,
-      props: { view: "image", file: got.rel, local: got.local, name: m.baseName(path), machine, path, w: size?.w ?? null, h: size?.h ?? null },
+      props: { ...extra, view: "image", file: got.rel, local: got.local, name: m.baseName(path), machine, path, w: size?.w ?? null, h: size?.h ?? null },
     });
     return;
   }
@@ -456,11 +458,13 @@ export async function openInApp(local) {
 
 const EXISTING = 'cwd=$1; shift; for f do case $f in "~/"*) f=$HOME/${f#"~/"} ;; /*) ;; *) f=$cwd/$f ;; esac; [ -f "$f" ] && printf "%s\\n" "$f"; done; exit 0';
 
-export async function terminalFiles(address, cwd, max = 5) {
+// The gallery reads `lines` of history as well, once it has shown what's on the screen.
+export async function terminalFiles(address, cwd, max = 5, lines = 0) {
   const { machine } = m.splitAddress(address);
-  const r = await hc(["read", address, "--lines", "0"]).catch(() => null);
+  const r = await hc(["read", address, "--lines", String(lines)]).catch(() => null);
   if (!r || r.code !== 0) return [];
-  const found = m.filePaths(r.stdout, 16);
+  // Twice as many as kept: a path with spaces is offered whole and as its tail.
+  const found = m.filePaths(r.stdout, Math.max(16, max * 2));
   if (!found.length) return [];
   const e = await exec("/bin/sh", ["-c", EXISTING, "sh", cwd || "/", ...found], machine ? { on: machine, timeout: 10_000 } : { timeout: 10_000 }).catch(() => null);
   if (!e || e.code !== 0) return [];
@@ -472,4 +476,39 @@ export async function terminalFiles(address, cwd, max = 5) {
     if (out.length >= max) break;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// The gallery
+
+export const GALLERY_KEY = "remote-open-gallery";
+
+// A window of tiles for every image and markdown file the terminal printed (main.js fills it).
+export function openGallery(address, cwd) {
+  openOverlay({ mod: MOD, kind: "window", key: GALLERY_KEY, width: 884, height: 620, props: { view: "gallery", terminal: address, cwd: cwd ?? null } });
+}
+
+// A tile's picture: a PNG no bigger than THUMB_PX a side, made by sips into the cache, so the
+// window never decodes twenty full-size screenshots. An SVG is drawn as it is. From another
+// machine the image is copied over first, and that full copy goes again once the tile is made.
+// Returns the picture's path relative to the app's folder and its size.
+export async function thumbnail(machine, path) {
+  const base = m.baseName(path);
+  const full = machine ? await fetchFile(machine, path, await sshTarget(machine)) : null;
+  const svg = /\.svg$/i.test(path);
+  if (full && svg) return { rel: full.rel, size: m.imageSize(full.bytes) };
+  try {
+    await fs.mkdir(cacheDir(), { recursive: true });
+    const name = svg ? m.cacheName(machine, path, Date.now()) : m.thumbName(machine, path, Date.now());
+    const local = `${cacheDir()}/${name}`;
+    // The paths are absolute (terminalFiles keeps only those), so none reads as an option.
+    const r = svg
+      ? await exec("/bin/cp", ["--", path, local], { timeout: 30_000 }).catch((e) => ({ code: -1, stderr: message(e) }))
+      : await exec("/usr/bin/sips", ["-Z", String(m.THUMB_PX), "-s", "format", "png", full?.local ?? path, "--out", local], { timeout: 30_000 }).catch((e) => ({ code: -1, stderr: message(e) }));
+    if (r.code !== 0) throw new Error(`Couldn't make a preview of ${base}.`);
+    if (full) await quarantine(local);
+    return { rel: `data/${MOD}/cache/${name}`, size: m.imageSize(await fs.readFile(local)) };
+  } finally {
+    if (full) await fs.unlink(full.local).catch(() => {});
+  }
 }

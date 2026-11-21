@@ -7,15 +7,17 @@
 // on that machine's localhost or is a sign-in's callback; an image or a markdown file in a
 // floating viewer; any other file in its Mac app.
 //
-// One mod, five kinds of copy, told apart by their props:
+// One mod, six kinds of copy, told apart by their props:
 //   (none)            the floating block: watches for requests, shows forwarded ports
+//                     (key command: gallery, for the focused terminal; "gallery:t7" for t7)
 //   { tab: "pane" }   the terminal right-click menu (layout root "terminal_menu")
 //   { view: "image" } the image viewer window (key commands: close, fit)
 //   { view: "markdown" } the markdown viewer window (key command: close)
+//   { view: "gallery" } every image the terminal printed, as tiles (key command: close-gallery)
 //   { view: "forwards" }, or opened by mod.open: the list of forwarded ports
 
 import { View, div } from "gpui-kit";
-import { props, run, closeOverlay, openOverlay, terminals, panes, keys, notify, checking, nextCommand, window as appWindow } from "herdr";
+import { props, run, closeOverlay, openOverlay, terminals, panes, keys, notify, checking, nextCommand, focused, window as appWindow } from "herdr";
 import * as m from "./model.js";
 import * as host from "./host.js";
 import * as views from "./views.js";
@@ -32,6 +34,7 @@ const OWNER_MS = 2000;
 const roleOf = (p) => {
   if (p?.view === "image") return "viewer";
   if (p?.view === "markdown") return "markdown";
+  if (p?.view === "gallery") return "gallery";
   if (p?.view === "forwards") return "forwards";
   if (p?.tab === "pane") return "menu";
   if (p?.tab) return "other-menu";
@@ -46,6 +49,7 @@ function shortcut(name, args) {
 }
 
 const fail = (title, e) => notify({ title, body: host.message(e), level: "error" });
+const cwdOf = (term) => term?.foreground?.cwd ?? term?.cwd ?? null;
 
 export default class RemoteOpen extends View {
   init(_props, cx) {
@@ -72,13 +76,19 @@ export default class RemoteOpen extends View {
     } else if (this.role === "menu") {
       this.at = 0;
       this.files = [];
+      this.count = 0;
       this.busy = null;
       const term = this.term();
       if (term && !checking())
         cx.spawn(async (cx) => {
-          this.files = await host.terminalFiles(term.address, term.foreground?.cwd ?? term.cwd).catch(() => []);
+          // All of them on the screen, for the gallery row's count; the newest few get rows.
+          const found = await host.terminalFiles(term.address, cwdOf(term), m.GALLERY_MAX).catch(() => []);
+          this.files = found.slice(0, m.MENU_FILES);
+          this.count = found.length;
           cx.notify();
         });
+    } else if (this.role === "gallery") {
+      this.initGallery(cx);
     } else if (this.role === "other-menu") {
       closeOverlay(props()?.overlay);
     } else if (this.role === "forwards") {
@@ -117,6 +127,25 @@ export default class RemoteOpen extends View {
     });
     host.sweepCache().catch(() => {});
     cx.timer.every(WATCH_MS, (cx) => this.tick(cx));
+    // Every copy gets each command: only the watcher on duty answers.
+    cx.spawn(async () => {
+      for (;;) {
+        const c = await nextCommand();
+        if (S.owner === this.token) this.command(c);
+      }
+    });
+  }
+
+  // "gallery" opens the gallery of the focused terminal (or the one shown in its place),
+  // "gallery:<address>" that terminal's. Other commands are the viewers'.
+  command(c) {
+    const [name, address] = String(c).split(/:(.+)/);
+    if (name !== "gallery") return;
+    const f = focused();
+    const target = address || f?.shown || f?.terminal;
+    const term = target && terminals().find((t) => t.address === target);
+    if (term) host.openGallery(term.address, cwdOf(term));
+    else notify({ title: "No terminal for the gallery", body: address ? `There's no terminal ${address}.` : "Focus a terminal first.", level: "error", timeout: 4000 });
   }
 
   tick(cx) {
@@ -251,6 +280,8 @@ export default class RemoteOpen extends View {
     const inTab = panes().some((pane) => pane.pane === tg.pane);
     const { machine } = m.splitAddress(term?.address ?? "");
     const files = this.files.map((path) => ({ label: `Open ${m.baseName(path)}`, tip: machine ? `${machine}: ${path}` : path, file: m.isMarkdown(path) ? "markdown" : "image", job: { machine, path }, busy: this.busy === path }));
+    // Every image it printed, scrolled away ones too: the screen's count, as far as it knows yet.
+    if (term) files.push({ label: "All images…", tip: "Every image and markdown file this terminal printed", file: "gallery", gallery: true, hint: this.count ? String(this.count) : "" });
     const pane = [
       ...(inTab
         ? [
@@ -270,13 +301,19 @@ export default class RemoteOpen extends View {
       ...(inTab ? [{ label: "Close pane", icon: "x", cmd: "pane.close", args: { pane: tg.pane }, sep: true }] : []),
     ];
     if (files.length && pane.length) pane[0] = { ...pane[0], sep: true };
-    return [...files, ...pane].map((it) => ({ ...it, hint: it.cmd ? shortcut(it.cmd, it.args) : "" }));
+    return [...files, ...pane].map((it) => ({ ...it, hint: it.cmd ? shortcut(it.cmd, it.args) : (it.hint ?? "") }));
   }
 
   choose(i, cx) {
     const it = this.items()[i];
     if (!it || this.busy) return;
     const overlay = props()?.overlay;
+    if (it.gallery) {
+      const term = this.term();
+      closeOverlay(overlay);
+      if (term) host.openGallery(term.address, cwdOf(term));
+      return;
+    }
     if (it.job) {
       // The watcher does it, so closing this menu doesn't drop the copy halfway.
       if (Date.now() - S.beat < OWNER_MS) {
@@ -305,6 +342,118 @@ export default class RemoteOpen extends View {
     else if (e.key === "escape") return closeOverlay(props()?.overlay);
     else return;
     cx.notify();
+  }
+
+  // -------------------------------------------------------------------------
+  // The gallery: what's on the screen shows at once, then what history adds (a read that takes
+  // seconds for the terminal on screen, and adds nothing for a program on the alternate screen,
+  // as Claude Code's fullscreen view is). Each image gets its tile's picture from sips, four at
+  // a time. Closing the window drops whatever is still loading, which nobody is waiting for.
+
+  initGallery(cx) {
+    this.tiles = [];
+    this.phase = "screen";
+    this.busy = null;
+    this.gen = 0;
+    if (checking()) return;
+    cx.spawn(async () => {
+      for (;;) if ((await nextCommand()) === "close-gallery") closeOverlay(props()?.overlay);
+    });
+    this.loadGallery(cx);
+  }
+
+  loadGallery(cx) {
+    const gen = ++this.gen;
+    const p = props() ?? {};
+    const cwd = cwdOf(terminals().find((t) => t.address === p.terminal)) ?? p.cwd ?? null;
+    this.tiles = [];
+    this.phase = "screen";
+    this.busy = null;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const screen = await host.terminalFiles(p.terminal, cwd, m.GALLERY_MAX).catch(() => []);
+      if (gen !== this.gen) return;
+      this.place(screen, gen, cx);
+      this.phase = "history";
+      cx.notify();
+      const all = await host.terminalFiles(p.terminal, cwd, m.GALLERY_MAX, m.HISTORY_LINES).catch(() => []);
+      if (gen !== this.gen) return;
+      this.place(all, gen, cx);
+      this.phase = "done";
+      cx.notify();
+    });
+  }
+
+  // Tiles in the order the files were printed (`newestFirst` is terminalFiles' order). Ones
+  // already there keep their pictures, and ones this read missed stay, at the end.
+  place(newestFirst, gen, cx) {
+    const have = new Map(this.tiles.map((t) => [t.path, t]));
+    const fresh = [];
+    const tiles = [...newestFirst].reverse().map((path) => {
+      if (have.has(path)) return have.get(path);
+      const kind = m.isMarkdown(path) ? "markdown" : "image";
+      const tile = { path, name: m.baseName(path), kind, state: kind === "image" ? "wait" : "ready", thumb: null, w: 0, h: 0 };
+      fresh.push(tile);
+      return tile;
+    });
+    for (const t of this.tiles) if (!tiles.includes(t)) tiles.push(t);
+    this.tiles = tiles;
+    const { machine } = m.splitAddress(props()?.terminal ?? "");
+    cx.spawn((cx) =>
+      m.each(fresh.filter((t) => t.kind === "image"), 4, async (t) => {
+        try {
+          const got = await host.thumbnail(machine, t.path);
+          Object.assign(t, { thumb: got.rel, w: got.size?.w ?? 0, h: got.size?.h ?? 0, state: "ready" });
+        } catch (e) {
+          Object.assign(t, { state: "failed", why: host.message(e) });
+        }
+        if (gen === this.gen) cx.notify();
+      }),
+    );
+  }
+
+  // An image opens in the viewer with the gallery's images to step through; markdown in its own.
+  openTile(i, cx) {
+    const t = this.tiles[i];
+    if (!t || this.busy) return;
+    const { machine } = m.splitAddress(props()?.terminal ?? "");
+    const images = this.tiles.filter((x) => x.kind === "image").map((x) => x.path);
+    const extra = t.kind === "image" ? { set: { paths: images, at: images.indexOf(t.path) } } : {};
+    this.busy = t.path;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      await host.openFile(machine, t.path, extra).catch((e) => fail(`Couldn't open ${t.name}`, e));
+      this.busy = null;
+      cx.notify();
+    });
+  }
+
+  galleryUi() {
+    const p = props() ?? {};
+    const term = terminals().find((t) => t.address === p.terminal);
+    const { machine } = m.splitAddress(p.terminal ?? "");
+    const from = [term?.title || term?.name || p.terminal, machine].filter(Boolean).join(" · ");
+    const count = m.galleryCount(this.tiles);
+    const status =
+      this.phase === "screen"
+        ? `${from} · looking…`
+        : this.phase === "history"
+          ? `${from}${count ? ` · ${count}` : ""} · looking further back…`
+          : `${from} · ${count || "none"}`;
+    return {
+      tiles: this.tiles.map((t) => ({ ...t, busy: this.busy === t.path })),
+      from: p.terminal ?? "",
+      status,
+      empty: this.phase === "done" ? "This terminal hasn't printed the path of an image or markdown file that's still there." : "",
+      handle: this.handle,
+      barHeight: host.BAR,
+      act: {
+        open: (i, cx) => this.openTile(i, cx),
+        reload: (cx) => this.loadGallery(cx),
+        close: () => closeOverlay(p.overlay),
+        key: (e) => e.key === "escape" && closeOverlay(p.overlay),
+      },
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -350,11 +499,28 @@ export default class RemoteOpen extends View {
         this.flash("Copied the markdown", cx);
       },
       openApp: (cx) => cx.spawn(async (cx) => ((await host.openInApp(p.local)) ? null : this.flash("macOS couldn't open it", cx))),
+      // The gallery's next or previous image, in this window's place.
+      step: (d, cx) => {
+        const set = p.set;
+        const at = (set?.at ?? -1) + d;
+        if (this.role !== "viewer" || this.stepping || !Array.isArray(set?.paths) || at < 0 || at >= set.paths.length) return;
+        this.stepping = true;
+        cx.spawn(async (cx) => {
+          try {
+            await host.openFile(p.machine ?? null, set.paths[at], { set: { ...set, at } });
+          } catch (e) {
+            this.flash(host.message(e), cx);
+          } finally {
+            this.stepping = false;
+          }
+        });
+      },
       // Web links go to the browser; anything else (a relative link, an anchor) stays put.
       link: (url, cx) => /^https?:\/\//i.test(url ?? "") && cx.open_url(url),
       close: () => closeOverlay(p.overlay),
       key: (e, cx) => {
         if (e.key === "escape") closeOverlay(p.overlay);
+        else if (e.key === "left" || e.key === "right") this.viewerActs().step(e.key === "left" ? -1 : 1, cx);
         else if (this.role === "viewer" && (e.key === "space" || e.key === "f")) {
           this.fit = !this.fit;
           cx.notify();
@@ -369,6 +535,7 @@ export default class RemoteOpen extends View {
     if (this.role === "watcher") return views.chip({ forwards: host.forwards(), act: { list: () => this.openList() } });
     if (this.role === "viewer") return views.viewer({ props: props() ?? {}, fit: this.fit, body: this.body, note: this.note, handle: this.handle, barHeight: host.BAR, act: this.viewerActs() });
     if (this.role === "markdown") return views.markdownViewer({ props: props() ?? {}, note: this.note, handle: this.handle, barHeight: host.BAR, act: this.viewerActs() });
+    if (this.role === "gallery") return views.gallery(this.galleryUi());
     if (this.role === "menu") return views.menu({ items: this.items(), at: this.at, handle: this.handle, act: { choose: (i, cx) => this.choose(i, cx), key: (e, cx) => this.menuKey(e, cx) } });
     if (this.role === "forwards")
       return views.forwardsList({
