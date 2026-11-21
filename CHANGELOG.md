@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Markdown files open rendered in their own floating viewer, with selectable text, Copy (the
+  source), Save to Downloads and Open in its app; web links open in the browser. The right-click
+  menu lists `.md` and `.markdown` paths on the terminal's screen beside images. Before, a
+  markdown file opened in its Mac app and the menu didn't offer it.
 - The right-click menu's images come up at once: it reads only the terminal's screen. With its
   history, the read took 1 to 4 s for the terminal on screen, so the images showed late.
 - The right-click menu finds unquoted paths with spaces, like a macOS screenshot's

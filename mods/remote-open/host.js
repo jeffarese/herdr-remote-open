@@ -9,6 +9,7 @@ import * as m from "./model.js";
 
 export const MOD = "remote-open";
 export const VIEWER_KEY = "remote-open-viewer";
+export const MARKDOWN_KEY = "remote-open-markdown";
 export const BAR = 36;
 
 const dataDir = () => `${appHome()}/data/${MOD}`;
@@ -341,11 +342,27 @@ export async function sweepCache(days = 3) {
   for (const name of names) if (m.cacheTime(name) < cutoff) await fs.unlink(`${cacheDir()}/${name}`).catch(() => {});
 }
 
-// An image opens in Herdr's floating viewer; a PDF or text file in its Mac app. Nothing else is
-// copied here.
+// An image or a markdown file opens in Herdr's floating viewer; a PDF or text file in its Mac
+// app. Nothing else is copied here.
 export async function openFile(machine, path) {
-  if (!m.opensHere(path)) throw new Error(`remote-open only opens images, PDFs and text files, not ${m.baseName(path)}.`);
+  if (!m.opensHere(path)) throw new Error(`remote-open only opens images, markdown, PDFs and text files, not ${m.baseName(path)}.`);
   const target = machine ? await sshTarget(machine) : null;
+  if (m.isMarkdown(path)) {
+    const got = await fetchFile(machine, path, target);
+    if (got.bytes.length > m.MARKDOWN_MAX) {
+      if (!(await openInApp(got.local))) throw new Error(`macOS couldn't open ${m.baseName(path)}.`);
+      return;
+    }
+    openOverlay({
+      mod: MOD,
+      kind: "window",
+      key: MARKDOWN_KEY,
+      width: 760,
+      height: 680,
+      props: { view: "markdown", text: m.decodeUtf8(got.bytes), local: got.local, name: m.baseName(path), machine, path },
+    });
+    return;
+  }
   if (m.isImage(path)) {
     const got = await fetchFile(machine, path, target);
     const size = m.imageSize(got.bytes);
@@ -432,18 +449,18 @@ export async function openInApp(local) {
 }
 
 // ---------------------------------------------------------------------------
-// Image paths on a terminal's screen, for its right-click menu: the newest that are files on
+// Image and markdown paths on a terminal's screen, for its right-click menu: the newest that are files on
 // its machine, at most `max`. Only the screen: the terminal right-clicked is the one shown, and
 // for a shown terminal `hc read --lines N` takes 1 to 4 s to add its history (and often gives
 // up and returns the screen alone), where the screen comes back in about 10 ms.
 
 const EXISTING = 'cwd=$1; shift; for f do case $f in "~/"*) f=$HOME/${f#"~/"} ;; /*) ;; *) f=$cwd/$f ;; esac; [ -f "$f" ] && printf "%s\\n" "$f"; done; exit 0';
 
-export async function terminalImages(address, cwd, max = 5) {
+export async function terminalFiles(address, cwd, max = 5) {
   const { machine } = m.splitAddress(address);
   const r = await hc(["read", address, "--lines", "0"]).catch(() => null);
   if (!r || r.code !== 0) return [];
-  const found = m.imagePaths(r.stdout, 16);
+  const found = m.filePaths(r.stdout, 16);
   if (!found.length) return [];
   const e = await exec("/bin/sh", ["-c", EXISTING, "sh", cwd || "/", ...found], machine ? { on: machine, timeout: 10_000 } : { timeout: 10_000 }).catch(() => null);
   if (!e || e.code !== 0) return [];

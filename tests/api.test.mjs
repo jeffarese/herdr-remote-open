@@ -23,7 +23,9 @@ test("the views only call methods gpui-kit has", { skip: !dts && "no gpui-kit.d.
   const trees = [
     views.viewer({ props: img, fit: true, body: { width: 500, height: 400 }, note: null, handle, barHeight: 36, act }),
     views.viewer({ props: { ...img, w: null, h: null, machine: null }, fit: false, body: null, note: "Copied", handle, barHeight: 36, act }),
-    views.menu({ items: [{ label: "Open a.png", image: true, busy: true }, { label: "Zoom", icon: "square", sep: true, hint: "⌘Z" }], at: 0, handle, act }),
+    views.markdownViewer({ props: { name: "notes.md", path: "/n/notes.md", machine: "studio", text: "# Notes\n\n- one" }, note: null, handle, barHeight: 36, act }),
+    views.markdownViewer({ props: { name: "notes.md", path: "/n/notes.md", machine: null, text: "" }, note: "Copied", handle, barHeight: 36, act }),
+    views.menu({ items: [{ label: "Open a.png", file: "image", busy: true }, { label: "Open notes.md", file: "markdown" }, { label: "Zoom", icon: "square", sep: true, hint: "⌘Z" }], at: 0, handle, act }),
     views.chip({ forwards: [], act }),
     views.chip({ forwards: fw.slice(0, 1), act }),
     views.chip({ forwards: fw, act }),

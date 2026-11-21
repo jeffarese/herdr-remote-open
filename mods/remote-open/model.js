@@ -34,12 +34,21 @@ const IMAGE_RE = new RegExp(`\\.(${IMAGE_EXTS.join("|")})$`, "i");
 
 export const isImage = (path) => IMAGE_RE.test(path ?? "");
 
+// Markdown opens rendered in Herdr's viewer, up to MARKDOWN_MAX; a bigger file in its Mac app.
+export const MARKDOWN_EXTS = ["md", "markdown"];
+const MARKDOWN_RE = new RegExp(`\\.(${MARKDOWN_EXTS.join("|")})$`, "i");
+export const isMarkdown = (path) => MARKDOWN_RE.test(path ?? "");
+export const MARKDOWN_MAX = 2 * 1024 * 1024;
+
+// What Herdr's own viewer shows, and so what the right-click menu offers.
+export const isViewable = (path) => isImage(path) || isMarkdown(path);
+
 // Other files that open in their Mac app. Only kinds that can't run anything: no apps, scripts
 // or .command files, and no web pages either (their scripts would run from a local file).
-export const DOC_EXTS = ["pdf", "txt", "md", "csv", "json", "log"];
+export const DOC_EXTS = ["pdf", "txt", "csv", "json", "log"];
 const DOC_RE = new RegExp(`\\.(${DOC_EXTS.join("|")})$`, "i");
 export const isDocument = (path) => DOC_RE.test(path ?? "");
-export const opensHere = (path) => isImage(path) || isDocument(path);
+export const opensHere = (path) => isViewable(path) || isDocument(path);
 
 // The request the shim puts on its terminal: {"v":1,"id","t","arg","cwd"}.
 export function parseRequest(value) {
@@ -346,10 +355,36 @@ export function viewerSize(img, bar) {
   return { width: Math.max(380, inner.w + 2), height: Math.max(240, inner.h + bar + 2) };
 }
 
-// ---------------------------------------------------------------------------
-// Image paths in a terminal's text, for the right-click menu
+// UTF-8 bytes as text, with U+FFFD for what isn't UTF-8 (the runtime has no TextDecoder).
+export function decodeUtf8(bytes) {
+  let out = "";
+  let i = 0;
+  const n = bytes.length;
+  if (n >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) i = 3; // a BOM
+  const cont = (k) => k < n && (bytes[k] & 0xc0) === 0x80;
+  while (i < n) {
+    const b = bytes[i];
+    let cp = 0xfffd;
+    let len = 1;
+    if (b < 0x80) cp = b;
+    else if (b >= 0xc2 && b < 0xe0 && cont(i + 1)) [cp, len] = [((b & 0x1f) << 6) | (bytes[i + 1] & 0x3f), 2];
+    else if (b >= 0xe0 && b < 0xf0 && cont(i + 1) && cont(i + 2)) {
+      const c = ((b & 0x0f) << 12) | ((bytes[i + 1] & 0x3f) << 6) | (bytes[i + 2] & 0x3f);
+      if (c >= 0x800 && (c < 0xd800 || c > 0xdfff)) [cp, len] = [c, 3];
+    } else if (b >= 0xf0 && b < 0xf5 && cont(i + 1) && cont(i + 2) && cont(i + 3)) {
+      const c = ((b & 0x07) << 18) | ((bytes[i + 1] & 0x3f) << 12) | ((bytes[i + 2] & 0x3f) << 6) | (bytes[i + 3] & 0x3f);
+      if (c >= 0x10000 && c <= 0x10ffff) [cp, len] = [c, 4];
+    }
+    out += String.fromCodePoint(cp);
+    i += len;
+  }
+  return out;
+}
 
-const EXT = IMAGE_EXTS.join("|");
+// ---------------------------------------------------------------------------
+// Image and markdown paths in a terminal's text, for the right-click menu
+
+const EXT = [...IMAGE_EXTS, ...MARKDOWN_EXTS].join("|");
 const QUOTED = new RegExp(`(["'\`])((?:file://)?[^"'\`\\n]*?\\.(?:${EXT}))\\1`, "gi");
 const BARE = new RegExp(`(?:file://)?(?:~/|\\.{1,2}/|/)?[A-Za-z0-9._@%+~-]*(?:/[A-Za-z0-9._@%+~-]+)*\\.(?:${EXT})(?![A-Za-z0-9])`, "gi");
 
@@ -367,10 +402,10 @@ function withSpaces(line, at, bare) {
   return null;
 }
 
-// The image paths printed in `text`, the most recent first, at most `max`. Relative ones are
+// The image and markdown paths printed in `text`, the most recent first, at most `max`. Relative ones are
 // left relative: the machine they're on resolves them against the terminal's folder, and
 // drops the ones that aren't files there.
-export function imagePaths(text, max = 8) {
+export function filePaths(text, max = 8) {
   const lines = String(text ?? "").split("\n");
   const seen = new Set();
   const out = [];
@@ -402,8 +437,8 @@ export function imagePaths(text, max = 8) {
         }
       }
       // "//host/x.png" is the end of a web link, not a file.
-      if (!p || p.startsWith("//") || IMAGE_RE.test(`x${p}`) === false || hasControl(p) || seen.has(p)) continue;
-      if (/^\.[A-Za-z]+$/.test(p)) continue; // a bare ".png"
+      if (!p || p.startsWith("//") || !isViewable(`x${p}`) || hasControl(p) || seen.has(p)) continue;
+      if (/^\.[A-Za-z]+$/.test(p)) continue; // a bare ".png" or ".md"
       seen.add(p);
       out.push(p);
       if (out.length >= max) break;

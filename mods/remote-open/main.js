@@ -4,13 +4,14 @@
 // BROWSER, and its xdg-open on Linux), which puts a request on its terminal as a label. Every
 // Herdr window sees the label; the one the person used last takes it, says so with another
 // label (model.js lists the keys), and opens it here: a page in the browser, with the port forwarded over ssh when it's
-// on that machine's localhost or is a sign-in's callback; an image in a floating viewer; any
-// other file in its Mac app.
+// on that machine's localhost or is a sign-in's callback; an image or a markdown file in a
+// floating viewer; any other file in its Mac app.
 //
-// One mod, four kinds of copy, told apart by their props:
+// One mod, five kinds of copy, told apart by their props:
 //   (none)            the floating block: watches for requests, shows forwarded ports
 //   { tab: "pane" }   the terminal right-click menu (layout root "terminal_menu")
 //   { view: "image" } the image viewer window (key commands: close, fit)
+//   { view: "markdown" } the markdown viewer window (key command: close)
 //   { view: "forwards" }, or opened by mod.open: the list of forwarded ports
 
 import { View, div } from "gpui-kit";
@@ -30,6 +31,7 @@ const OWNER_MS = 2000;
 
 const roleOf = (p) => {
   if (p?.view === "image") return "viewer";
+  if (p?.view === "markdown") return "markdown";
   if (p?.view === "forwards") return "forwards";
   if (p?.tab === "pane") return "menu";
   if (p?.tab) return "other-menu";
@@ -51,7 +53,7 @@ export default class RemoteOpen extends View {
     if (this.role === "watcher") return this.initWatcher(cx);
     this.handle = cx.focus_handle();
     this.handle.focus();
-    if (this.role === "viewer") {
+    if (this.role === "viewer" || this.role === "markdown") {
       this.fit = true;
       this.body = null;
       this.note = null;
@@ -61,7 +63,7 @@ export default class RemoteOpen extends View {
           for (;;) {
             const c = await nextCommand();
             if (c === "close") closeOverlay(props()?.overlay);
-            else if (c === "fit") {
+            else if (c === "fit" && this.role === "viewer") {
               this.fit = !this.fit;
               cx.notify();
             }
@@ -69,12 +71,12 @@ export default class RemoteOpen extends View {
         });
     } else if (this.role === "menu") {
       this.at = 0;
-      this.images = [];
+      this.files = [];
       this.busy = null;
       const term = this.term();
       if (term && !checking())
         cx.spawn(async (cx) => {
-          this.images = await host.terminalImages(term.address, term.foreground?.cwd ?? term.cwd).catch(() => []);
+          this.files = await host.terminalFiles(term.address, term.foreground?.cwd ?? term.cwd).catch(() => []);
           cx.notify();
         });
     } else if (this.role === "other-menu") {
@@ -248,7 +250,7 @@ export default class RemoteOpen extends View {
     // A terminal shown outside a tab (a layout block, a window) has no pane to split or close.
     const inTab = panes().some((pane) => pane.pane === tg.pane);
     const { machine } = m.splitAddress(term?.address ?? "");
-    const images = this.images.map((path) => ({ label: `Open ${m.baseName(path)}`, tip: machine ? `${machine}: ${path}` : path, image: true, job: { machine, path }, busy: this.busy === path }));
+    const files = this.files.map((path) => ({ label: `Open ${m.baseName(path)}`, tip: machine ? `${machine}: ${path}` : path, file: m.isMarkdown(path) ? "markdown" : "image", job: { machine, path }, busy: this.busy === path }));
     const pane = [
       ...(inTab
         ? [
@@ -267,8 +269,8 @@ export default class RemoteOpen extends View {
       ...(parent ? [{ label: `Send back to ${parent.name || parent.address}`, icon: "terminal", cmd: "terminal.park", args: { terminal: term.address } }] : []),
       ...(inTab ? [{ label: "Close pane", icon: "x", cmd: "pane.close", args: { pane: tg.pane }, sep: true }] : []),
     ];
-    if (images.length && pane.length) pane[0] = { ...pane[0], sep: true };
-    return [...images, ...pane].map((it) => ({ ...it, hint: it.cmd ? shortcut(it.cmd, it.args) : "" }));
+    if (files.length && pane.length) pane[0] = { ...pane[0], sep: true };
+    return [...files, ...pane].map((it) => ({ ...it, hint: it.cmd ? shortcut(it.cmd, it.args) : "" }));
   }
 
   choose(i, cx) {
@@ -343,11 +345,17 @@ export default class RemoteOpen extends View {
             this.flash(host.message(e), cx);
           }
         }),
+      copyText: (cx) => {
+        cx.write_to_clipboard(p.text ?? "");
+        this.flash("Copied the markdown", cx);
+      },
       openApp: (cx) => cx.spawn(async (cx) => ((await host.openInApp(p.local)) ? null : this.flash("macOS couldn't open it", cx))),
+      // Web links go to the browser; anything else (a relative link, an anchor) stays put.
+      link: (url, cx) => /^https?:\/\//i.test(url ?? "") && cx.open_url(url),
       close: () => closeOverlay(p.overlay),
       key: (e, cx) => {
         if (e.key === "escape") closeOverlay(p.overlay);
-        else if (e.key === "space" || e.key === "f") {
+        else if (this.role === "viewer" && (e.key === "space" || e.key === "f")) {
           this.fit = !this.fit;
           cx.notify();
         }
@@ -360,6 +368,7 @@ export default class RemoteOpen extends View {
   render() {
     if (this.role === "watcher") return views.chip({ forwards: host.forwards(), act: { list: () => this.openList() } });
     if (this.role === "viewer") return views.viewer({ props: props() ?? {}, fit: this.fit, body: this.body, note: this.note, handle: this.handle, barHeight: host.BAR, act: this.viewerActs() });
+    if (this.role === "markdown") return views.markdownViewer({ props: props() ?? {}, note: this.note, handle: this.handle, barHeight: host.BAR, act: this.viewerActs() });
     if (this.role === "menu") return views.menu({ items: this.items(), at: this.at, handle: this.handle, act: { choose: (i, cx) => this.choose(i, cx), key: (e, cx) => this.menuKey(e, cx) } });
     if (this.role === "forwards")
       return views.forwardsList({

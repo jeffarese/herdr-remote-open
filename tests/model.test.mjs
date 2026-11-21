@@ -87,6 +87,11 @@ test("addresses, host names and paths", () => {
   assert.equal(m.opensHere("/x/report.pdf"), true);
   assert.equal(m.opensHere("/x/page.HTML"), false, "a page's scripts would run from a local file");
   assert.equal(m.opensHere("/x/notes.MD"), true);
+  assert.equal(m.isMarkdown("/x/notes.MD"), true);
+  assert.equal(m.isMarkdown("/x/guide.markdown"), true);
+  assert.equal(m.isMarkdown("/x/page.mdx"), false);
+  assert.equal(m.isDocument("/x/notes.md"), false, "markdown has its own viewer");
+  assert.equal(m.isViewable("/x/a.png") && m.isViewable("/x/a.md") && !m.isViewable("/x/a.pdf"), true);
   for (const p of ["/x/run.command", "/x/App.app", "/x/a.terminal", "/x/script.sh", "/x/noext"]) assert.equal(m.opensHere(p), false, p);
   assert.equal(m.parseSize("   1234 /x/y\n"), 1234);
   assert.equal(m.parseSize("1234 /x/y"), 1234);
@@ -167,12 +172,27 @@ test("image paths a terminal printed, newest first", () => {
     "build 1.2.3 done, .png",
     "--out=report.jpeg",
   ].join("\n");
-  assert.deepEqual(m.imagePaths(text), ["report.jpeg", "/tmp/a b.jpg", "/home/x/My Shot.png", "./diff.webp", "out/chart.svg", "/home/x/old.png"]);
-  assert.deepEqual(m.imagePaths(text, 2), ["report.jpeg", "/tmp/a b.jpg"]);
-  assert.deepEqual(m.imagePaths("nothing here"), []);
-  assert.deepEqual(m.imagePaths("~/Desktop/x.png"), ["~/Desktop/x.png"]);
+  assert.deepEqual(m.filePaths(text), ["report.jpeg", "/tmp/a b.jpg", "/home/x/My Shot.png", "./diff.webp", "out/chart.svg", "/home/x/old.png"]);
+  assert.deepEqual(m.filePaths(text, 2), ["report.jpeg", "/tmp/a b.jpg"]);
+  assert.deepEqual(m.filePaths("nothing here"), []);
+  assert.deepEqual(m.filePaths("~/Desktop/x.png"), ["~/Desktop/x.png"]);
   // A macOS screenshot's name has spaces and isn't quoted: the whole path is offered first.
-  assert.deepEqual(m.imagePaths("   /Users/me/Desktop/Screenshot 2026-09-22 at 20.12.45.png"), ["/Users/me/Desktop/Screenshot 2026-09-22 at 20.12.45.png", "20.12.45.png"]);
-  assert.deepEqual(m.imagePaths("open ~/Shots/a b.png now"), ["~/Shots/a b.png", "b.png"]);
-  assert.deepEqual(m.imagePaths("see /tmp/x.png"), ["/tmp/x.png"], "no spaces: one path");
+  assert.deepEqual(m.filePaths("   /Users/me/Desktop/Screenshot 2026-09-22 at 20.12.45.png"), ["/Users/me/Desktop/Screenshot 2026-09-22 at 20.12.45.png", "20.12.45.png"]);
+  assert.deepEqual(m.filePaths("open ~/Shots/a b.png now"), ["~/Shots/a b.png", "b.png"]);
+  assert.deepEqual(m.filePaths("see /tmp/x.png"), ["/tmp/x.png"], "no spaces: one path");
+});
+
+test("markdown paths are found beside image paths", () => {
+  const text = ["Write(~/weekly-updates/2026-11-21-flowie/notes.md)", "  L Wrote 31 lines to /Users/me/weekly-updates/2026-11-21-flowie/notes.md", "see shot.png, page.mdx and guide.markdown"].join("\n");
+  assert.deepEqual(m.filePaths(text), ["guide.markdown", "shot.png", "/Users/me/weekly-updates/2026-11-21-flowie/notes.md", "~/weekly-updates/2026-11-21-flowie/notes.md"]);
+  assert.deepEqual(m.filePaths("a bare .md"), []);
+});
+
+test("UTF-8 decodes, with a replacement for what isn't UTF-8", () => {
+  const enc = (s) => [...Buffer.from(s, "utf8")];
+  assert.equal(m.decodeUtf8(enc("plain # text")), "plain # text");
+  assert.equal(m.decodeUtf8(enc("Caf\u00e9 \u2014 \u{1F600}")), "Caf\u00e9 \u2014 \u{1F600}");
+  assert.equal(m.decodeUtf8([0xef, 0xbb, 0xbf, 0x41]), "A", "a BOM is dropped");
+  assert.equal(m.decodeUtf8([0x41, 0xff, 0x42, 0xc3]), "A\ufffdB\ufffd");
+  assert.equal(m.decodeUtf8([0xed, 0xa0, 0x80]), "\ufffd\ufffd\ufffd", "no lone surrogates");
 });

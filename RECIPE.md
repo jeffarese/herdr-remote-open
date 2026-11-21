@@ -38,11 +38,17 @@ Every color comes from `theme()`. Icons are 24-unit stroke SVGs (lucide style, 2
     (Save to Downloads); **external** (Open in its app); **x** (Close).
   - The body on `canvas` (falling back to `background`), 8 px padding, the image centred: fitted
     to the body while fitting, else at its own size, scrolling both ways.
+- **Markdown viewer** (a floating window, 760 × 680): the image viewer's title bar with the
+  `markdown` icon (a page with lines) and `studio` (or `this Mac`) as its text, and the buttons
+  **copy** (the markdown source, `cx.write_to_clipboard`, note `Copied the markdown`),
+  **download**, **external** and **x**; no fit. The body is `TextView.markdown` from `gpui-base`,
+  selectable and scrollable, 22 px side and 14 px top padding, 13.5 px type in `foreground`.
 - **Terminal menu** (pointer popup, 270 × 360 from `mod.json`): on `popover`, 5 px padding,
   12.8 px type. 31 px rows, radius 7, 8 px padding, 9 px gap: a 14 px icon (`muted`), the label
   (truncated, tooltip), the key in 11 px `dim` at the right. The selected row (arrow keys) on
   `selected`, hovered rows on `hover`, 1 px `border` rules between groups:
-  - up to five images, newest first, `Open chart.png`, the `image` icon, tooltip `machine: path`;
+  - up to five images and markdown files, newest first, `Open chart.png`, the `image` or
+    `markdown` icon, tooltip `machine: path`;
   - Herdr's own pane items, as the shipped menu has them: Split right, Split down, Zoom, then
     "Send right-clicks to pane" (or "Use Herdr right-click menu"), "Send back to <parent>" for a
     parked terminal, and after a rule Close pane. Split, Zoom and Close only for a terminal in a
@@ -86,7 +92,8 @@ answered, for as long as their label stays.
   `continue`, `next`, `target`, `url`, `goto`, `dest`, `destination` or `fromURI` holds a URL
   with one. Anything else opens with `cx.open_url`.
 - Files: an absolute path, `file://` URL or a path relative to `cwd`. Images
-  (`png jpg jpeg gif webp bmp svg`) open in the viewer; `pdf txt md csv json log` open with
+  (`png jpg jpeg gif webp bmp svg`) and markdown (`md markdown`) open in their viewers;
+  `pdf txt csv json log` open with
   `/usr/bin/open`. Any other kind, `.html` included, is left alone (no bid), so its machine opens
   it.
 - Other schemes are left alone.
@@ -117,7 +124,12 @@ answered, for as long as their label stays.
 - Copies go to `data/remote-open/cache/<base36 time>-<fnv1a of machine:path>-<name cleaned to
   [A-Za-z0-9._-]>`, are checked again against 100 MiB, get
   `xattr -w com.apple.quarantine "0081;<hex time>;Herdr;"`, and are swept after 3 days.
-- An image over 16,384 px a side or 64 Mpx opens with `open` instead of the viewer.
+- An image over 16,384 px a side or 64 Mpx opens with `open` instead of the viewer, and so does
+  markdown over 2 MiB.
+- Markdown goes to its viewer as text in its props, decoded from UTF-8 in model.js (the runtime
+  has no `TextDecoder`; a bad byte becomes U+FFFD), under the key `remote-open-markdown`.
+- Its links: `http`/`https` open with `cx.open_url` (`on_link_click`); relative links and
+  anchors do nothing.
 - The viewer is `openOverlay({kind:"window", key:"remote-open-viewer", …})`, so a new image
   replaces the one shown. Its size comes from the image's own header (PNG, GIF, BMP, WebP, JPEG
   SOF, SVG `width`/`height`/`viewBox`).
@@ -155,6 +167,7 @@ answered, for as long as their label stays.
 - **mod.json:** `{"place":"none","title":"Remote open","overlay":{"kind":"dialog","width":270,"height":360}}`.
 - **One mod, roles by `props()`:**
   - `{view:"image"}`: the viewer;
+  - `{view:"markdown"}`: the markdown viewer;
   - `{view:"forwards"}`, or any copy with an `overlay` and no `tab` (`mod.open`): the forwards
     list;
   - `{tab:"pane"}`: the terminal menu;

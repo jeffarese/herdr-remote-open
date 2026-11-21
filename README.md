@@ -28,8 +28,9 @@ a pretend machine on the same Mac, and every session in them is made up
 | A program opens `http://localhost:PORT` (or `127.0.0.1`, `[::1]`), port 1024 or above | Forwards `PORT` until you stop it, then opens the page |
 | A program opens any other `http(s)` page | Opens it in your browser |
 | A program opens an image: `png jpg jpeg gif webp bmp svg` | Copies it here and shows it in a floating viewer |
-| A program opens a PDF or a text file: `pdf txt md csv json log` | Copies it here and opens it in its Mac app |
-| You right-click the terminal | The menu offers the last images it printed, one click to view |
+| A program opens a markdown file: `md markdown` | Copies it here and shows it rendered in a floating viewer |
+| A program opens a PDF or a text file: `pdf txt csv json log` | Copies it here and opens it in its Mac app |
+| You right-click the terminal | The menu offers the last images and markdown files it printed, one click to view |
 
 ## Contents
 
@@ -106,13 +107,19 @@ herdr-open http://localhost:5173
 
 **See an image.** A program that opens an image (`xdg-open chart.png`, Python's `webbrowser`, or
 `herdr-open chart.png`) shows it in the floating viewer. For one a program only printed, right-click
-the terminal: the menu lists up to five images on its screen that exist on that machine, macOS
-screenshots with spaces in their names too.
+the terminal: the menu lists up to five images and markdown files on its screen that exist on that
+machine, macOS screenshots with spaces in their names too.
+
+**Read a markdown file.** The same goes for `.md` and `.markdown`: an agent's `Write(…/notes.md)`
+on screen is one right-click away. It opens rendered in its own floating window, with text you
+can select, **Copy** (the markdown source), **Save** to Downloads, **Open in its app** and Esc to
+close. Web links open in the browser; links to other files don't. A file over 2 MB opens in its Mac
+app instead.
 
 Agents can be told to use it. A line like this in a remote machine's `CLAUDE.md` does it:
 
 ```md
-To show me an image, a PDF or a page you serve on localhost, run `herdr-open <file or URL>`.
+To show me an image, a markdown file, a PDF or a page you serve on localhost, run `herdr-open <file or URL>`.
 ```
 
 **The viewer.** Drag it by its title bar. It shows the file's name, the machine it came from and its
@@ -193,13 +200,13 @@ instead.
 | **Port … is already in use on this Mac** | Something here listens on that port, so the redirect would reach it. Stop it and open the link again. |
 | **… forwards to studio. Stop that forward first.** | The same port is forwarded from another machine. Stop it from the chip. |
 | **… has no ssh address in Herdr** | The machine is reached through `--via`, so there's no ssh target to forward with. Pages open without a forward. |
-| The right-click menu has no images | Only paths on the terminal's screen count, not ones that scrolled off it, and only files that exist on that machine. For an older one, run `herdr-open <path>` there. Agents' collapsed tool output isn't on screen. |
+| The right-click menu has no images or markdown files | Only paths on the terminal's screen count, not ones that scrolled off it, and only files that exist on that machine. For an older one, run `herdr-open <path>` there. Agents' collapsed tool output isn't on screen. |
 | **… has a herdr-open marker line without its pair** | Someone edited the block in that shell file. Fix or delete it by hand, then run the install again. |
 
 ## Limits
 
 - **⌘-click isn't caught.** Herdr gives mods no hook for clicks on terminal text, so a printed link
-  or path you ⌘-click is still Herdr's. Right-click for images; for a printed localhost link, run
+  or path you ⌘-click is still Herdr's. Right-click for images and markdown; for a printed localhost link, run
   `herdr-open <url>` there.
 - **On macOS, only programs that read `BROWSER`** reach herdr-open: Python's `webbrowser`, `gh`,
   `gcloud`, many Node CLIs. Programs that call `/usr/bin/open` directly still open on that Mac.
@@ -210,7 +217,7 @@ instead.
   So do `0.0.0.0`, `127.0.0.2` and `*.localhost`.
 - A sign-in counts only when its redirect is in a parameter made for it (`redirect_uri`,
   `callback`, `return_to` and the like, or nested a level down in `continue` or `next`).
-- One viewer at a time.
+- One image viewer and one markdown viewer at a time.
 - macOS only on this side: it uses `ioreg`, `osascript`, `open`. The other machine can be anything
   with `sh`, `base64` and Herdr's `hc`.
 
@@ -218,7 +225,7 @@ instead.
 
 - **What a machine can make this Mac do.** Anything running as you on a connected machine can
   put a request on a terminal. The most it gets is a page in your browser, a forwarded port, and a
-  copied image, PDF or text file opened in its Mac app. Only `http`/`https` pages open. Nothing that
+  copied image, markdown, PDF or text file opened in its Mac app. Only `http`/`https` pages open. Nothing that
   can run is copied (apps, scripts, `.command`, `.html`), and copies carry the quarantine flag.
 - **Forwards** listen on `127.0.0.1` only, from port 1024 up. While one runs, that port on this Mac
   reaches the other machine: if a service of yours that uses the port is down, its clients would
@@ -253,7 +260,7 @@ npm run check   # shellcheck, herdr-app check, then the tests
 
 | Path | What it is |
 | --- | --- |
-| `mods/remote-open/main.js` | The four copies (watcher, menu, viewer, forwards list) and the election |
+| `mods/remote-open/main.js` | The five copies (watcher, menu, image viewer, markdown viewer, forwards list) and the election |
 | `mods/remote-open/host.js` | Everything that touches this Mac: forwards, copies, the viewer's buttons |
 | `mods/remote-open/model.js` | Pure logic: requests, loopback detection, bids, image headers, paths |
 | `mods/remote-open/views.js` | What's drawn |

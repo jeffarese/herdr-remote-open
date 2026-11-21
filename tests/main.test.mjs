@@ -29,6 +29,10 @@ function makeCx() {
     open_url(url) {
       cx.opened.push(url);
     },
+    clipboard: null,
+    write_to_clipboard(t) {
+      cx.clipboard = t;
+    },
     focus_handle: () => ({ focus() {} }),
     stop_propagation() {},
     timer: { every: (ms, fn) => timers.push(fn) },
@@ -329,6 +333,48 @@ test("an image too big to draw here opens in its Mac app instead", async () => {
   await cx.tick();
   assert.equal(world.overlays.length, 0);
   assert.ok(world.execs.some(([cmd, args]) => cmd === "/usr/bin/open" && /huge\.png$/.test(args[0])));
+});
+
+test("a markdown file a program opened is shown rendered in its own viewer", async () => {
+  const md = "# Notes\n\nCaf\u00e9 \u2014 see [docs](https://example.com/docs).\n";
+  const bytes = Buffer.from(md, "utf8");
+  host({ idle: 0, wc: `${bytes.length}\n`, b64: bytes.toString("base64") });
+  world.window = { platform: "macos", active: true };
+  world.terminals = [{ address: "studio/t18", labels: {} }];
+  const { cx } = await watcher();
+  ask("studio/t18", "aaaa00000016", "/home/sandbox/notes.md");
+  await cx.tick();
+  const win = world.overlays.at(-1);
+  assert.equal(win.kind, "window");
+  assert.equal(win.key, "remote-open-markdown");
+  assert.equal(win.props.view, "markdown");
+  assert.equal(win.props.text, md);
+  assert.equal(win.props.name, "notes.md");
+  assert.ok(world.execs.some(([cmd, args]) => cmd === "/usr/bin/xattr" && args[3] === win.props.local), "marked as from elsewhere");
+  assert.ok(!world.execs.some(([cmd]) => cmd === "/usr/bin/open"), "not handed to its Mac app");
+});
+
+test("the markdown viewer renders the text, copies it, opens web links only, and closes on Esc", () => {
+  world.props = { view: "markdown", text: "# Notes\n[a](https://example.com/a) [b](other.md)", local: "/x/notes.md", name: "notes.md", machine: "studio", path: "/home/notes.md", overlay: "o4" };
+  world.closed = [];
+  const cx = makeCx();
+  const v = new RemoteOpen();
+  v.init(world.props, cx);
+  const tree = v.render();
+  const md = [...(function* walk(n) { yield n; for (const k of n.kids ?? []) if (k && typeof k === "object") yield* walk(k); })(tree)].find((n) => n.kind === "text_view");
+  assert.equal(md.arg.text, world.props.text);
+  assert.match(text(byId(tree, "ro-bar")), /notes\.md.*studio/);
+  const acts = v.viewerActs();
+  acts.copyText(cx);
+  assert.equal(cx.clipboard, world.props.text);
+  acts.link("https://example.com/a", cx);
+  acts.link("other.md", cx);
+  acts.link("#top", cx);
+  assert.deepEqual(cx.opened, ["https://example.com/a"]);
+  acts.key({ key: "f" }, cx);
+  assert.equal(v.fit, true, "no fit toggle here");
+  acts.key({ key: "escape" }, cx);
+  assert.deepEqual(world.closed, ["o4"]);
 });
 
 test("the menu lists the images the terminal printed above Herdr's pane items", async () => {

@@ -1,9 +1,10 @@
-// What remote-open draws: the floating image viewer, the terminal right-click menu (Herdr's
-// pane items plus the images the terminal printed), the forwards chip and its list. Each view
+// What remote-open draws: the floating image and markdown viewers, the terminal right-click menu
+// (Herdr's pane items plus the images and markdown files the terminal printed), the forwards
+// chip and its list. Each view
 // takes a `ui` with the copy's state and its actions, so tests can draw them without Herdr.
 
 import { div, svg, image } from "gpui-kit";
-import { h_flex, v_flex } from "gpui-base";
+import { h_flex, v_flex, TextView } from "gpui-base";
 import { theme } from "herdr";
 import { fit } from "./model.js";
 
@@ -101,8 +102,64 @@ export function viewer(ui) {
 }
 
 // ---------------------------------------------------------------------------
-// The terminal menu: the pane items Herdr's own menu has, and above them the images this
-// terminal printed most recently.
+// The markdown viewer: the same window, with the file rendered and selectable.
+
+export function markdownViewer(ui) {
+  const t = theme();
+  const p = ui.props;
+  const bar = h_flex()
+    .id("ro-bar")
+    .h(ui.barHeight)
+    .flex_none()
+    .w_full()
+    .pl(12)
+    .pr(6)
+    .gap(4)
+    .items_center()
+    .border_b(1)
+    .border_color(t.border)
+    .child(svg(icon("markdown")).size(14).flex_none().text_color(t.muted))
+    .child(
+      h_flex()
+        .flex_1()
+        .min_w(0)
+        .gap(6)
+        .items_baseline()
+        .child(div().flex_shrink_0().font_semibold().whitespace_nowrap().child(p.name))
+        .child(div().min_w(0).truncate().text_size(11.5).text_color(t.dim).tooltip(p.path).child(ui.note ?? p.machine ?? "this Mac")),
+    )
+    .child(button(t, "ro-copy", "copy", "Copy the markdown", (cx) => ui.act.copyText(cx)))
+    .child(button(t, "ro-save", "download", "Save to Downloads", (cx) => ui.act.save(cx)))
+    .child(button(t, "ro-open", "external", "Open in its app", (cx) => ui.act.openApp(cx)))
+    .child(button(t, "ro-close", "x", "Close (Esc)", (cx) => ui.act.close(cx)));
+
+  const body = TextView.markdown("ro-md", p.text ?? "")
+    .selectable(true)
+    .scrollable(true)
+    .on_link_click((url, cx) => ui.act.link(url, cx))
+    .flex_1()
+    .min_h(0)
+    .w_full()
+    .px(22)
+    .py(14)
+    .text_size(13.5)
+    .text_color(t.foreground);
+
+  return v_flex()
+    .id("ro-markdown")
+    .size_full()
+    .bg(t.background)
+    .text_color(t.foreground)
+    .text_size(12.5)
+    .track_focus(ui.handle)
+    .on_key_down((e, cx) => ui.act.key(e, cx))
+    .child(bar)
+    .child(body);
+}
+
+// ---------------------------------------------------------------------------
+// The terminal menu: the pane items Herdr's own menu has, and above them the images and
+// markdown files this terminal printed most recently.
 
 export const MENU_ROW = 31;
 
@@ -135,7 +192,7 @@ export function menu(ui) {
               .when(it.busy, (el) => el.loop("opacity", { from: 0.45, to: 1, period: 900 }))
               .hover((s) => s.bg(t.hover))
               .on_click((_e, cx) => ui.act.choose(i, cx))
-              .child(svg(it.image ? icon("image") : chrome(it.icon)).size(14).flex_none().text_color(t.muted))
+              .child(svg(it.file ? icon(it.file) : chrome(it.icon)).size(14).flex_none().text_color(t.muted))
               .child(div().flex_1().min_w(0).truncate().tooltip(it.tip ?? it.label).child(it.label))
               .child(div().flex_none().text_size(11).text_color(t.dim).child(it.hint ?? "")),
           ),
