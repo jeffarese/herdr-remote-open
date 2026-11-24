@@ -24,8 +24,9 @@ Every color comes from `theme()`. Icons are 24-unit stroke SVGs (lucide style, 2
 - **Forwards list** (a 320 px popup from the chip, as tall as its rows; or a 270 × 360 dialog from
   `mod.open`): on `popover`, 5 px padding. A 11.5 px `dim` heading, "Ports forwarded to this Mac"
   ("No ports are forwarded." when empty). One 44 px row each, radius 7, `hover` behind it on hover:
-  the `forward` icon (`accent`), `localhost:8085` (semibold) over `studio · until stopped` or
-  `studio · sign-in, 7 min left` (11 px `dim`), then **open** and **stop** icon buttons. With two
+  the `forward` icon (`accent`), `localhost:8085` (semibold) over `studio · in use`,
+  `studio · unused, stops in 3 min` or `studio · sign-in, 7 min left` (11 px `dim`), then **open**
+  and **stop** icon buttons. With two
   or more, a `border` rule and a 31 px **Stop all** row.
 - **Image viewer** (a floating window, sized to the picture: fitted into 1100 × 760, at least
   380 × 240, plus the bar):
@@ -106,7 +107,8 @@ answered, for as long as their label stays.
 
 **What it takes.**
 - `http(s)` URLs. On `localhost`, `127.0.0.1` or `[::1]` with an explicit port of 1024 or more,
-  it forwards that port until stopped. A sign-in gets its port forwarded for 10 minutes. A URL is
+  it forwards that port until stopped or unused for 5 minutes. A sign-in gets its port forwarded
+  for 10 minutes. A URL is
   a sign-in when one of these parameters (query or fragment) holds such a URL:
   `redirect_uri`, `redirect_url`, `redirect`, `redirect_to`, `callback`, `callback_url`,
   `return_to`, `return_url`, matched case-blind with `_`/`-` ignored. It is also a sign-in when
@@ -159,9 +161,24 @@ answered, for as long as their label stays.
   already listens on it (`net.connect` to `127.0.0.1` and `::1`).
 - Records go to `data/remote-open/forwards.json`, written `pending` before ssh starts. At start
   each is checked with `ssh -S sock -O check`; dead ones get `-O exit` and are dropped, and so does
-  any socket in `cm/` with no record. Pending records older than 40 s are settled every 30 s.
+  any socket in `cm/` with no record. Pending records older than 40 s are settled.
+- The watcher on duty does that again every 20 s, so a forward that ended any way (stopped, its
+  ssh gone, dropped by another copy of the mod through the file) leaves the chip; the file is
+  written only when it changed. A stop made while the records are being read stays stopped: the
+  read drops any record of a port stopped after that record started.
+- Then `netstat -an -p tcp` once: a page's forward with an `ESTABLISHED` connection whose local
+  address is `127.0.0.1.PORT` or `::1.PORT` is in use. Each check without one adds the time since
+  the last, at most 40 s; one with it starts again from 0. Opening the link again counts as use,
+  and a sign-in that reuses a page's forward holds it for its 10 minutes. The count is kept in
+  memory only: a reload starts it again. At
+  5 minutes unused it's stopped, holding the port as an open does, with a toast
+  "Stopped :5173 from studio", "Nothing used it for 5 minutes. Open the link again to bring it
+  back." A check where netstat fails, or doesn't show the forward's own `LISTEN` on its port (it
+  couldn't see the sockets), doesn't count. Sign-ins keep their 10 minutes.
+- Every watcher copy draws its chip again when the forwards change, the one on duty or not.
 - Stop is `-O exit` on that socket. ssh needs a host there, but any name works.
-- Toasts: "Sign-in opened here" / "Opened :5173 from studio", or the error.
+- Toasts: "Sign-in opened here" / "Opened :5173 from studio" ("The port stays forwarded while you
+  use it, and stops after 5 minutes unused."), or the error.
 
 **Files.**
 - First `/bin/sh -c '[ -f "$1" ] && [ -r "$1" ] || exit 3; exec wc -c <"$1"'` (with `on` for
@@ -241,8 +258,9 @@ answered, for as long as their label stays.
 ports** (`mod.open {name: "remote-open"}`: the forwards list as a dialog) and **Images in this
 terminal** (`remote-open.gallery`, the watcher's key command).
 
-**Forwards list.** Each time it opens it reads the records again and checks every forward
-(`ssh -O check`), so one that died since the watcher started isn't listed.
+**Forwards list.** Each time it opens it runs the watcher's check (records, `ssh -O check`,
+netstat), so one that died isn't listed and each page's says whether it's in use. It draws again
+every 10 s.
 
 ## Built from
 

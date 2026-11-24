@@ -26,7 +26,7 @@ a pretend machine on the same Mac, and every session in them is made up
 | On the other machine | On this Mac |
 | --- | --- |
 | A program opens a sign-in whose `redirect_uri` is `http://localhost:PORT/…` | Forwards `PORT` from that machine for 10 minutes, then opens the page in your browser |
-| A program opens `http://localhost:PORT` (or `127.0.0.1`, `[::1]`), port 1024 or above | Forwards `PORT` until you stop it, then opens the page |
+| A program opens `http://localhost:PORT` (or `127.0.0.1`, `[::1]`), port 1024 or above | Forwards `PORT` while you use it, then opens the page |
 | A program opens any other `http(s)` page | Opens it in your browser |
 | A program opens an image: `png jpg jpeg gif webp bmp svg` | Copies it here and shows it in a floating viewer |
 | A program opens a markdown file: `md markdown` | Copies it here and shows it rendered in a floating viewer |
@@ -104,7 +104,11 @@ the program on the other machine through the forward. The forward ends after 10 
 you stop it.
 
 **Open a dev server.** Anything that opens `http://localhost:PORT` (a `--open` flag, `open`-style
-helpers) gets the port forwarded until you stop it. To open one yourself from that machine:
+helpers) gets the port forwarded while you use it. Once nothing has had a connection open through
+it for 5 minutes (you closed the tab, or the server on the other machine), the forward stops by
+itself and a toast says so. A dev server's page with live reload keeps its connection open, so the
+forward stays while the tab is open. Open the link again to bring it back. To open one yourself
+from that machine:
 
 ```sh
 herdr-open http://localhost:5173
@@ -114,7 +118,7 @@ herdr-open http://localhost:5173
 
 | You ⌘-click | It does |
 | --- | --- |
-| `http://localhost:5173` (or `127.0.0.1`, `[::1]`), port 1024 or above | Forwards the port until you stop it, then opens the page |
+| `http://localhost:5173` (or `127.0.0.1`, `[::1]`), port 1024 or above | Forwards the port while you use it, then opens the page |
 | A sign-in link whose redirect goes to that machine's localhost | Forwards the callback port for 10 minutes, then opens the page |
 | `runs/w46/loss.png`, `~/shots/a.png`, `/tmp/chart.svg` | Copies the image here and shows it in the viewer |
 | `docs/plan.md`, `notes.md:12`, `README.md#L5` | Shows the markdown rendered; the line isn't used |
@@ -166,8 +170,10 @@ A new image replaces the one shown. Key commands, for `keys.json`: `remote-open:
 `herdr-app do remote-open.gallery:t7` opens t7's gallery).
 
 **Forwards.** While a port is forwarded, a chip floats at the bottom of the window:
-`⇄ :8085 studio`, or `⇄ 3 forwards`. Click it to see each one with its time left, open it, or stop
-it. The command palette's **Forwarded ports** shows the same list. Forwards outlive mod
+`⇄ :8085 studio`, or `⇄ 3 forwards`. Click it to see each one, open it, or stop it: a sign-in's
+with its minutes left, a page's as in use or with how soon it stops unused. The command palette's
+**Forwarded ports** shows the same list. Every 20 seconds the mod checks each forward, so one that
+ended (stopped, or its ssh gone when the other machine slept) leaves the chip. Forwards outlive mod
 reloads and Herdr restarts; at start the mod finds them again and drops the dead ones.
 
 ## How it works
@@ -216,7 +222,11 @@ there is no election.
 **Forwards.** `ssh -f -M -S <socket> -L 127.0.0.1:PORT:localhost:PORT <target>`, to the ssh target
 Herdr itself uses for that machine (`hc machine ls`). `BatchMode=yes` and `ExitOnForwardFailure=yes`,
 so it fails instead of asking or half-working. A sign-in's forward runs `sleep 600` on the other side
-and ends by itself; a page's runs `-N` until stopped. The control socket in
+and ends by itself; a page's runs `-N` until it's stopped. Every 20 seconds the floating block reads
+the records again, checks each forward, and looks with `netstat` for a connection open on each
+page's port here (ssh holds one for every connection through it). A page's forward with none at 5
+minutes of checks in a row is stopped; a check counts for at most 40 seconds, so a Mac waking from
+sleep doesn't find its forwards long unused. The control socket in
 `~/.config/herdr-app/data/remote-open/cm` is how the mod checks a forward and ends exactly that
 one; no process is ever found by name. The local port is the remote one, because that's the port
 the link and the redirect name.
@@ -239,6 +249,7 @@ its tile is made.
 | **Couldn't forward port … Permission denied / Host key verification failed** | ssh asked a question. Run `ssh <target> true` once from this Mac and answer it, or load your key. |
 | **Port … is already in use on this Mac** | Something here listens on that port, so the redirect would reach it. Stop it and open the link again. |
 | **… forwards to studio. Stop that forward first.** | The same port is forwarded from another machine. Stop it from the chip. |
+| A localhost page that worked stops loading, after a toast **Stopped :5173 from studio** | Nothing had a connection open through its forward for 5 minutes, so it stopped. Open the link again. A page without live reload, left open, looks unused. |
 | **… has no ssh address in Herdr** | The machine is reached through `--via`, so there's no ssh target to forward with. Pages open without a forward. |
 | A ⌘-click on a path does nothing | Herdr didn't see a path there (a bare `chart.png` without a folder isn't one: print `./chart.png`), or the layout's `link_handlers` doesn't name `remote-open`: run `./install.sh` again. `herdr-app status` shows a handler's error. |
 | A ⌘-click on a localhost link opens this Mac's own localhost | The pane is this Mac's, the link has no port, or the port is below 1024: those stay Herdr's. |
@@ -277,8 +288,9 @@ its tile is made.
   forwards a port, but can't click it.
 - **Forwards** listen on `127.0.0.1` only, from port 1024 up. While one runs, that port on this Mac
   reaches the other machine: if a service of yours that uses the port is down, its clients would
-  reach the other machine instead. That's why sign-in forwards end after 10 minutes, a page can't
-  claim a port just by naming it in a parameter, and the chip shows every forward.
+  reach the other machine instead. That's why sign-in forwards end after 10 minutes, a page's
+  once unused for 5, a page can't claim a port just by naming it in a parameter, and the chip
+  shows every forward.
 - **No shell strings.** The mod runs programs as argument lists. Its few fixed `sh -c` scripts
   (starting ssh with its output in a file, measuring and reading a file, checking printed paths)
   take every value as an argument, never inside the script. ssh targets come from Herdr's machine

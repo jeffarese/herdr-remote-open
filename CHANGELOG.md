@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Unused forwards stop.** A page's forward stops by itself once nothing has had a connection
+  open through it for 5 minutes, with a toast saying so: close the tab, or the server on the other
+  machine, and it goes. A dev server's page with live reload keeps it while the tab is open, and
+  opening the link again brings it back. The list shows each one as in use, or how soon it stops.
+  Before, a page's forward ran until you stopped it. Sign-ins keep their 10 minutes.
+- **The chip follows the forwards.** Every 20 seconds the mod checks each forward and reads the
+  records again, so one that ended leaves the chip: its ssh gone when the other machine slept or
+  the network changed, or stopped by another copy of the mod. A stop made while the list was
+  still checking the forwards is no longer undone by that check, and a chip in a window not on
+  duty draws again too. Before, a forward could stay on the chip after it was stopped or had ended.
 - **⌘-click.** In a pane on another machine, ⌘-clicking a `localhost` link or a sign-in link
   forwards its port and opens it here, and ⌘-clicking the path of an image, a markdown file, a
   PDF or a text file copies it over and shows it, as `herdr-open` would. Before, the localhost
