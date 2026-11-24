@@ -27,6 +27,7 @@ test("personal layouts get the watcher and the menu; Herdr's own and other menus
   const mine = load(home, "mine");
   assert.deepEqual(mine.floating.map((f) => f.id), ["toasts", "remote-open"]);
   assert.equal(mine.terminal_menu, "remote-open");
+  assert.deepEqual(mine.link_handlers, ["remote-open"]);
   assert.ok(existsSync(join(home, "layouts/mine.json.before-remote-open")));
   assert.deepEqual(load(home, "main"), { id: "root" });
   assert.equal(load(home, "menu").terminal_menu, "my-menu");
@@ -55,5 +56,19 @@ test("named layouts only: the others stay as they were, and a wrong name says so
   assert.deepEqual(load(home, "main"), { id: "root" });
   assert.match(r.stdout, /Skipped main: it is one of Herdr's own layouts/);
   assert.match(r.stdout, /No such layout: nope/);
+  rmSync(home, { recursive: true });
+});
+
+test("the link handler goes first among a layout's, stays where it was put, and comes out alone", () => {
+  const home = appHome();
+  writeFileSync(join(home, "layouts/links.json"), JSON.stringify({ id: "root", link_handlers: ["my-browser"] }));
+  writeFileSync(join(home, "layouts/placed.json"), JSON.stringify({ id: "root", link_handlers: ["my-browser", "remote-open"] }));
+  assert.equal(py(home, "layouts", "add").status, 0);
+  assert.deepEqual(load(home, "links").link_handlers, ["remote-open", "my-browser"]);
+  assert.deepEqual(load(home, "placed").link_handlers, ["my-browser", "remote-open"]);
+  assert.equal(py(home, "layouts", "remove").status, 0);
+  assert.deepEqual(load(home, "links").link_handlers, ["my-browser"]);
+  assert.deepEqual(load(home, "placed").link_handlers, ["my-browser"]);
+  assert.equal("link_handlers" in load(home, "mine"), false);
   rmSync(home, { recursive: true });
 });

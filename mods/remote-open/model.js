@@ -1,6 +1,6 @@
 // What remote-open decides, kept apart from Herdr so it can be tested on its own: what a request
-// asks for, which port a link needs forwarded, which Herdr window takes a request, and what an
-// image file is.
+// asks for, which port a link needs forwarded, which Herdr window takes a request, what an
+// image file is, and which ⌘-clicks in a terminal are remote-open's.
 
 // Label keys on the terminal that asked, one set per request, so two at once don't touch:
 //   remote-open.req.<id>        {"v":1,"id","t","arg","cwd"}, put there by herdr-open
@@ -448,6 +448,61 @@ export function filePaths(text, max = 8) {
 }
 
 export const baseName = (path) => path.split("/").filter(Boolean).pop() ?? path;
+
+// ---------------------------------------------------------------------------
+// ⌘-clicks on links and paths in a terminal (link.js; mod.json's link_handlers say which reach it)
+
+// The end of a clicked path that says where in the file, not what it's called: ":12", ":12:3",
+// ":5-12", "#L5", "#L5-L12".
+const COORDS = /(?::\d+(?::\d+)?(?:-\d+(?::\d+)?)?|#L\d+(?:-L?\d+)?)$/;
+
+// What a ⌘-click asks of remote-open, or null for a click that stays Herdr's. Ours are the ones
+// in another machine's terminal that this Mac's own opener gets wrong or can't do at all: a page
+// on that machine's localhost, a sign-in whose redirect goes back there, and a file remote-open
+// opens here. Herdr gives a remote path as it was printed (`raw`): a relative one is resolved
+// against the terminal's folder, and "~/…" is left for its machine to expand.
+export function linkTarget(click) {
+  const link = click?.link;
+  const src = click?.source;
+  const machine = (typeof src?.machine === "string" && src.machine) || splitAddress(src?.terminal ?? "").machine;
+  if (!link || !machine || hasControl(machine)) return null;
+  if (link.kind === "url") {
+    const page = typeof link.url === "string" && !hasControl(link.url) ? classify(link.url, null) : null;
+    return page?.kind === "web" && loopbackTarget(page.url) ? { kind: "web", machine, url: page.url } : null;
+  }
+  if (link.kind !== "file") return null;
+  let text = typeof link.path === "string" && link.path ? link.path : link.raw;
+  if (typeof text !== "string" || !text || text.length > 4096 || hasControl(text)) return null;
+  if (!opensHere(text)) text = text.replace(COORDS, "");
+  if (!opensHere(text)) return null;
+  if (text.startsWith("~/")) return { kind: "file", machine, path: text };
+  const cwd = typeof src.cwd === "string" && src.cwd.startsWith("/") && !hasControl(src.cwd) ? src.cwd : null;
+  const file = classify(text, cwd);
+  return file?.kind === "file" ? { kind: "file", machine, path: file.path } : null;
+}
+
+// link.js leaves each click it takes in localStorage under CLICKS, for the watcher to do: Herdr
+// shares that store between a mod's link handler and its copies without props, which the watcher
+// is. One the watcher hasn't taken after CLICK_WAIT is done by link.js itself.
+export const CLICKS = "clicks";
+export const CLICK_WAIT = 1000;
+
+// The clicks waiting there: [{id, at, kind, machine, url | path}], without what isn't one.
+export function parseClicks(text) {
+  let list;
+  try {
+    list = JSON.parse(text ?? "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (j) =>
+      j && typeof j.id === "string" && Number.isFinite(j.at) && typeof j.machine === "string" && j.machine &&
+      ((j.kind === "web" && typeof j.url === "string" && classify(j.url, null)?.kind === "web") ||
+        (j.kind === "file" && typeof j.path === "string" && /^(~\/|\/)/.test(j.path) && !hasControl(j.path) && opensHere(j.path))),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // The gallery: every image and markdown file a terminal printed, as tiles

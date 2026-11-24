@@ -219,3 +219,80 @@ test("the gallery counts images and markdown files apart", () => {
   assert.equal(m.galleryCount([{ kind: "markdown" }, { kind: "markdown" }]), "2 markdown files");
   assert.equal(m.thumbName(null, "/tmp/My Shot.png", 0), `0-${m.cacheName(null, "/tmp/My Shot.png", 0).split("-")[1]}-My_Shot.png.thumb.png`);
 });
+
+// A ⌘-click as Herdr hands it to link.js.
+const click = (link, source = {}) => ({ link, source: { terminal: "studio/t6", machine: "studio", cwd: "/home/sandbox/app", pane: "p1", tab: "tb1", space: "sp1", ...source } });
+const url = (u) => ({ kind: "url", raw: u, url: u });
+const file = (raw, more = {}) => ({ kind: "file", raw, path: null, ...more });
+
+test("a ⌘-click is ours for another machine's localhost page, sign-in or viewable file", () => {
+  assert.deepEqual(m.linkTarget(click(url("http://localhost:5173/x?y=1"))), { kind: "web", machine: "studio", url: "http://localhost:5173/x?y=1" });
+  const signIn = "https://accounts.example/auth?redirect_uri=http%3A%2F%2F127.0.0.1%3A8085%2Fcb";
+  assert.deepEqual(m.linkTarget(click(url(signIn))), { kind: "web", machine: "studio", url: signIn });
+  // Relative to the terminal's folder, with where in the file taken off.
+  assert.deepEqual(m.linkTarget(click(file("runs/w46/loss.png"))), { kind: "file", machine: "studio", path: "/home/sandbox/app/runs/w46/loss.png" });
+  assert.equal(m.linkTarget(click(file("./notes.md:12:3", { line: 12, column: 3 }))).path, "/home/sandbox/app/notes.md");
+  assert.equal(m.linkTarget(click(file("docs/plan.md#L5-L12", { line: 5 }))).path, "/home/sandbox/app/docs/plan.md");
+  assert.equal(m.linkTarget(click(file("/var/log/app.log:5-12", { line: 5 }))).path, "/var/log/app.log");
+  assert.equal(m.linkTarget(click(file("file:///tmp/a%20b.pdf"))).path, "/tmp/a b.pdf");
+  // Its machine expands "~".
+  assert.equal(m.linkTarget(click(file("~/shots/Screenshot 1.png"))).path, "~/shots/Screenshot 1.png");
+  // The machine comes from the terminal's address when Herdr doesn't name it.
+  assert.equal(m.linkTarget(click(file("/tmp/a.png"), { machine: undefined })).machine, "studio");
+});
+
+test("every other ⌘-click stays Herdr's", () => {
+  const here = { terminal: "t4", machine: null };
+  assert.equal(m.linkTarget(click(url("http://localhost:5173/"), here)), null, "this Mac's localhost is this Mac's");
+  assert.equal(m.linkTarget(click(file("/tmp/a.png", { path: "/tmp/a.png" }), here)), null);
+  assert.equal(m.linkTarget(click(url("https://example.com/localhost"))), null, "an ordinary page");
+  assert.equal(m.linkTarget(click(url("http://localhost/"))), null, "no port to forward");
+  assert.equal(m.linkTarget(click(url("http://localhost:80/"))), null);
+  assert.equal(m.linkTarget(click(file("build/index.html"))), null, "nothing that can run");
+  assert.equal(m.linkTarget(click(file("run.sh:3", { line: 3 }))), null);
+  assert.equal(m.linkTarget(click(file("runs/loss.png"), { cwd: null })), null, "nowhere to resolve it against");
+  assert.equal(m.linkTarget(click(file("a\u0007.png"))), null);
+  assert.equal(m.linkTarget(click({ kind: "mail", raw: "mailto:a@example.com" })), null);
+  assert.equal(m.linkTarget(null), null);
+  assert.equal(m.linkTarget({ link: url("http://localhost:5173/") }), null);
+});
+
+test("waiting clicks are read back only when they are whole", () => {
+  const web = { id: "a", at: 5, kind: "web", machine: "studio", url: "http://localhost:5173/" };
+  const png = { id: "b", at: 6, kind: "file", machine: "studio", path: "~/a.png" };
+  assert.deepEqual(m.parseClicks(JSON.stringify([web, png])), [web, png]);
+  assert.deepEqual(m.parseClicks(null), []);
+  assert.deepEqual(m.parseClicks("not json"), []);
+  assert.deepEqual(m.parseClicks('{"id":"a"}'), []);
+  const bad = [{ ...web, url: "javascript:alert(1)" }, { ...png, path: "relative.png" }, { ...png, path: "/tmp/run.sh" }, { ...web, machine: "" }, { ...web, at: "now" }, null];
+  assert.deepEqual(m.parseClicks(JSON.stringify(bad)), []);
+});
+
+test("mod.json's link rules reach link.js with every click that could be ours", async () => {
+  const { readFileSync } = await import("node:fs");
+  const mod = JSON.parse(readFileSync(new URL("../mods/remote-open/mod.json", import.meta.url), "utf8"));
+  // Rust's "(?i)" is JavaScript's i flag.
+  const rule = (kind) => {
+    const pattern = mod.link_handlers.find((r) => r.kind === kind).pattern;
+    assert.ok(pattern.startsWith("(?i)"));
+    return new RegExp(pattern.slice(4), "i");
+  };
+  for (const ext of [...m.IMAGE_EXTS, ...m.MARKDOWN_EXTS, ...m.DOC_EXTS]) {
+    assert.ok(rule("file").test(`/tmp/a.${ext}`), ext);
+    assert.ok(rule("file").test(`/tmp/A.${ext.toUpperCase()}`), ext);
+  }
+  assert.equal(rule("file").test("/tmp/a.html"), false);
+  const pages = [
+    "http://localhost:5173/",
+    "http://127.0.0.1:8080/x",
+    "http://[::1]:3000/",
+    "https://accounts.example/auth?redirect_uri=http%3A%2F%2Flocalhost%3A8085%2F",
+    "https://accounts.example/auth?redirect_uri=http://127.0.0.1:8085/",
+    "https://accounts.example/auth?redirect_uri=http%3A%2F%2F%5B%3A%3A1%5D%3A8085%2F",
+    "https://accounts.example/a?continue=https%3A%2F%2Fb.example%2Fc%3Fredirect_uri%3Dhttp%253A%252F%252Flocalhost%253A8085",
+  ];
+  for (const page of pages) assert.ok(rule("url").test(page), page);
+  assert.equal(rule("url").test("https://example.com/docs"), false);
+  // The palette's own command is one the watcher answers.
+  assert.deepEqual(mod.palette.map((p) => p.command), ["mod.open", "remote-open.gallery"]);
+});

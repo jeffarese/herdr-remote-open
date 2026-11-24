@@ -2,9 +2,10 @@
 """The part of installing remote-open that edits the person's layouts.
 
     install.py layouts add [NAME...]      put the watcher (an invisible floating block that
-                                          shows forwarded ports) and the terminal menu into
-                                          personal layouts, or only the ones named
-    install.py layouts remove [NAME...]   take both out again (the menu only if still ours)
+                                          shows forwarded ports), the terminal menu and the
+                                          link handler (Cmd-clicks in terminals) into personal
+                                          layouts, or only the ones named
+    install.py layouts remove [NAME...]   take them out again (the menu only if still ours)
 
 The app's home is ~/.config/herdr-app, or $HERDR_APP_HOME. Herdr's own layouts are never
 edited. A changed layout keeps its old file beside it as <name>.json.before-remote-open.
@@ -52,6 +53,15 @@ def add(layout):
         changed = True
     elif menu != MOD:
         print(f"  its terminal menu is {menu!r}, so the image items aren't added there")
+    # First, so a mod that takes every link doesn't get another machine's localhost ones: ours
+    # passes on whatever isn't its own. Where it already is (Herdr adds it itself the first time
+    # it sees the mod), it stays.
+    handlers = layout.get("link_handlers")
+    if not isinstance(handlers, list):
+        handlers = []
+    if MOD not in handlers:
+        layout["link_handlers"] = [MOD] + handlers
+        changed = True
     return changed
 
 
@@ -68,6 +78,14 @@ def remove(layout):
                 del layout["floating"]
     if layout.get("terminal_menu") == MOD:
         del layout["terminal_menu"]
+        changed = True
+    handlers = layout.get("link_handlers")
+    if isinstance(handlers, list) and MOD in handlers:
+        rest = [h for h in handlers if h != MOD]
+        if rest:
+            layout["link_handlers"] = rest
+        else:
+            del layout["link_handlers"]
         changed = True
     return changed
 

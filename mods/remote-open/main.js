@@ -5,11 +5,12 @@
 // Herdr window sees the label; the one the person used last takes it, says so with another
 // label (model.js lists the keys), and opens it here: a page in the browser, with the port forwarded over ssh when it's
 // on that machine's localhost or is a sign-in's callback; an image or a markdown file in a
-// floating viewer; any other file in its Mac app.
+// floating viewer; any other file in its Mac app. A ⌘-click on a link or a path in another
+// machine's terminal asks the same of it, through link.js.
 //
 // One mod, six kinds of copy, told apart by their props:
-//   (none)            the floating block: watches for requests, shows forwarded ports
-//                     (key command: gallery, for the focused terminal; "gallery:t7" for t7)
+//   (none)            the floating block: watches for requests and ⌘-clicks, shows forwarded
+//                     ports (key command: gallery, for the focused terminal; "gallery:t7" for t7)
 //   { tab: "pane" }   the terminal right-click menu (layout root "terminal_menu")
 //   { view: "image" } the image viewer window (key commands: close, fit)
 //   { view: "markdown" } the markdown viewer window (key command: close)
@@ -25,8 +26,9 @@ import * as views from "./views.js";
 // Shared by every copy of this build. `owner`/`beat`: which floating copy is the watcher now
 // (a timestamp that goes stale, never a promise, so a closed copy can't hold it). `seen`:
 // request id → when it was first and last seen. `keys`: when each remote-open label was first
-// seen, to sweep the ones left behind.
-const S = { owner: null, beat: 0, inbox: [], seen: new Map(), keys: new Map(), me: null, lastUse: 0, wasActive: false };
+// seen, to sweep the ones left behind. `shown`: the image the viewer opened last, which the
+// gallery steps on from.
+const S = { owner: null, beat: 0, inbox: [], seen: new Map(), keys: new Map(), me: null, lastUse: 0, wasActive: false, shown: null };
 export const _state = S; // for the tests
 const WATCH_MS = 300;
 const OWNER_MS = 2000;
@@ -61,6 +63,7 @@ export default class RemoteOpen extends View {
       this.fit = true;
       this.body = null;
       this.note = null;
+      if (this.role === "viewer") S.shown = { machine: props()?.machine ?? null, path: props()?.path ?? null };
       // A key bound to "remote-open:close" (or `herdr-app do remote-open.close`) closes it.
       if (!checking())
         cx.spawn(async (cx) => {
@@ -92,8 +95,9 @@ export default class RemoteOpen extends View {
     } else if (this.role === "other-menu") {
       closeOverlay(props()?.overlay);
     } else if (this.role === "forwards") {
+      // Read again each time it opens: a forward that died since isn't listed.
       if (!checking()) cx.spawn(async (cx) => {
-        await host.loadForwards();
+        await host.loadForwards(true);
         cx.notify();
       });
       cx.timer.every(30_000, (cx) => cx.notify());
@@ -160,9 +164,11 @@ export default class RemoteOpen extends View {
     if (S.wasActive && !active) S.lastUse = now;
     S.wasActive = active;
     this.scan(cx, true);
+    // What the menu and link.js (⌘-clicks) left for this copy to do.
+    S.inbox.push(...host.takeClicks());
     while (S.inbox.length) {
       const job = S.inbox.shift();
-      if (now - job.at < 15_000) cx.spawn(() => host.openFile(job.machine, job.path).catch((e) => fail(`Couldn't open ${m.baseName(job.path)}`, e)));
+      if (now - job.at < 15_000) cx.spawn((cx) => host.openTarget(job, cx).catch((e) => fail(`Couldn't open ${host.targetName(job)}`, e)));
     }
     if (now - this.swept > 5000) {
       this.swept = now;
@@ -279,7 +285,7 @@ export default class RemoteOpen extends View {
     // A terminal shown outside a tab (a layout block, a window) has no pane to split or close.
     const inTab = panes().some((pane) => pane.pane === tg.pane);
     const { machine } = m.splitAddress(term?.address ?? "");
-    const files = this.files.map((path) => ({ label: `Open ${m.baseName(path)}`, tip: machine ? `${machine}: ${path}` : path, file: m.isMarkdown(path) ? "markdown" : "image", job: { machine, path }, busy: this.busy === path }));
+    const files = this.files.map((path) => ({ label: `Open ${m.baseName(path)}`, tip: machine ? `${machine}: ${path}` : path, file: m.isMarkdown(path) ? "markdown" : "image", job: { kind: "file", machine, path }, busy: this.busy === path }));
     // Every image it printed, scrolled away ones too: the screen's count, as far as it knows yet.
     if (term) files.push({ label: "All images…", tip: "Every image and markdown file this terminal printed", file: "gallery", gallery: true, hint: this.count ? String(this.count) : "" });
     const pane = [
@@ -413,6 +419,16 @@ export default class RemoteOpen extends View {
   }
 
   // An image opens in the viewer with the gallery's images to step through; markdown in its own.
+  // The mouse's side buttons, over the gallery: the image before or after the one the viewer
+  // shows, or the first (forward) or last (back) when it shows none of this terminal's.
+  stepTile(d, cx) {
+    const images = this.tiles.filter((t) => t.kind === "image");
+    const { machine } = m.splitAddress(props()?.terminal ?? "");
+    const cur = S.shown && S.shown.machine === machine ? images.findIndex((t) => t.path === S.shown.path) : -1;
+    const next = cur < 0 ? (d > 0 ? images[0] : images.at(-1)) : images[cur + d];
+    if (next) this.openTile(this.tiles.indexOf(next), cx);
+  }
+
   openTile(i, cx) {
     const t = this.tiles[i];
     if (!t || this.busy) return;
@@ -449,6 +465,7 @@ export default class RemoteOpen extends View {
       barHeight: host.BAR,
       act: {
         open: (i, cx) => this.openTile(i, cx),
+        step: (d, cx) => this.stepTile(d, cx),
         reload: (cx) => this.loadGallery(cx),
         close: () => closeOverlay(p.overlay),
         key: (e) => e.key === "escape" && closeOverlay(p.overlay),

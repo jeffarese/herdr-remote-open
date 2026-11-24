@@ -2,6 +2,7 @@
 # Install the remote-open mod into the Herdr app, update it, or take it out.
 #
 #   ./install.sh                     copy mods/remote-open in and add it to your own layouts
+#                                    (the watcher, the terminal menu, the link handler)
 #   ./install.sh --machines a b      also set herdr-open up on those machines (--all: every
 #                                    connected one); see scripts/machines.sh
 #   ./install.sh --remove            take it out of your layouts and delete the mod (machines:

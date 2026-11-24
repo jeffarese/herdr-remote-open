@@ -9,6 +9,7 @@ import { listeners } from "./stubs/net.mjs";
 import RemoteOpen, { _state } from "../mods/remote-open/main.js";
 import * as m from "../mods/remote-open/model.js";
 import * as hostjs from "../mods/remote-open/host.js";
+import { handleLink } from "../mods/remote-open/link.js";
 
 // The start of a PNG of w×h: enough for model.imageSize.
 function png(w, h) {
@@ -606,4 +607,157 @@ test("the gallery key command opens the focused terminal's gallery, or the one i
   assert.equal(world.overlays.length, opened);
   assert.match(world.notes.at(-1).body, /no terminal t77/);
   world.focused = null;
+});
+
+// ---------------------------------------------------------------------------
+// ⌘-clicks (link.js)
+
+const click = (link, source = {}) => ({ link, source: { terminal: "studio/t6", machine: "studio", cwd: "/home/sandbox/app", pane: "p1", tab: "tb1", space: "sp1", ...source } });
+const page = (u) => ({ kind: "url", raw: u, url: u });
+const sshStart = (bind) => world.execs.find(([cmd, args]) => cmd === "/bin/sh" && args[1].includes("/usr/bin/ssh") && args.includes(bind));
+const ran = (program) => world.execs.filter(([cmd]) => cmd === program);
+// link.js waits by running sleep: time for the watcher, when there is one, to tick.
+function whileItSleeps(fn) {
+  const base = world.exec;
+  world.exec = async (cmd, args, options) => {
+    if (cmd === "/bin/sleep") await fn();
+    return base(cmd, args, options);
+  };
+}
+
+test("a ⌘-click on another machine's localhost link is left for the watcher, which forwards the port and opens it", async () => {
+  host();
+  world.window = { platform: "macos", active: true };
+  world.terminals = [{ address: "studio/t6", labels: {} }];
+  const { cx } = await watcher();
+  whileItSleeps(() => cx.tick());
+  assert.equal(await handleLink(click(page("http://localhost:5183/app"))), "handled");
+  await cx.settle();
+  const ssh = sshStart("127.0.0.1:5183:localhost:5183");
+  assert.ok(ssh, "the port is forwarded");
+  assert.ok(ssh[1].includes("-N"), "until stopped");
+  assert.deepEqual(cx.opened, ["http://localhost:5183/app"]);
+  assert.equal(world.notes.at(-1).title, "Opened :5183 from studio");
+  assert.equal(ran("/usr/bin/open").length, 0, "the watcher opened it, not link.js");
+  assert.equal(ran("/bin/sleep").length, 1, "taken at the watcher's next tick");
+  assert.equal(localStorage.getItem(m.CLICKS), null);
+  await hostjs.stopForward(hostjs.forwards().find((r) => r.port === 5183));
+});
+
+test("with no watcher in the layout, link.js forwards and opens a clicked sign-in itself", async () => {
+  host();
+  Object.assign(_state, { owner: null, beat: 0, inbox: [] });
+  const signIn = "https://accounts.example/auth?redirect_uri=http%3A%2F%2F127.0.0.1%3A8095%2Fcb";
+  assert.equal(await handleLink(click(page(signIn))), "handled");
+  assert.deepEqual(ran("/bin/sleep").map(([, args]) => args), Array(5).fill(["0.2"]), "it waited a second for a watcher");
+  const ssh = sshStart("127.0.0.1:8095:127.0.0.1:8095");
+  assert.deepEqual(ssh[1].slice(-3), ["studio-sandbox", "sleep", "600"]);
+  assert.deepEqual(ran("/usr/bin/open").map(([, args]) => args), [[signIn]]);
+  assert.equal(world.notes.at(-1).title, "Sign-in opened here");
+  assert.equal(localStorage.getItem(m.CLICKS), null, "nothing left waiting");
+  await hostjs.stopForward(hostjs.forwards().find((r) => r.port === 8095));
+});
+
+test("⌘-clicks that aren't ours are passed on untouched", async () => {
+  host();
+  const here = { terminal: "t4", machine: null, cwd: "/Users/me" };
+  assert.equal(await handleLink(click(page("http://localhost:5173/"), here)), "pass");
+  assert.equal(await handleLink(click({ kind: "file", raw: "shot.png", path: "/Users/me/shot.png" }, here)), "pass");
+  assert.equal(await handleLink(click(page("https://example.com/localhost"))), "pass");
+  assert.equal(await handleLink(click({ kind: "file", raw: "build/index.html", path: null })), "pass");
+  assert.equal(await handleLink({}), "pass");
+  assert.deepEqual(world.execs, []);
+  assert.deepEqual(world.notes, []);
+  assert.equal(localStorage.getItem(m.CLICKS), null);
+});
+
+test("a ⌘-click on a path printed on another machine shows the file here", async () => {
+  host({ wc: "33\n", b64: png(800, 600).toString("base64") });
+  world.window = { platform: "macos", active: true };
+  world.terminals = [{ address: "studio/t6", labels: {} }];
+  const { cx } = await watcher();
+  const base = world.exec;
+  world.exec = async (cmd, args, options) => (cmd === "/bin/sh" && args[1].includes('"$HOME"') ? { code: 0, stdout: "/home/sandbox\n", stderr: "" } : base(cmd, args, options));
+  whileItSleeps(() => cx.tick());
+
+  assert.equal(await handleLink(click({ kind: "file", raw: "runs/w46/loss.png:1", path: null, line: 1 })), "handled");
+  await cx.settle();
+  let win = world.overlays.at(-1);
+  assert.equal(win.key, "remote-open-viewer");
+  assert.equal(win.props.machine, "studio");
+  assert.equal(win.props.path, "/home/sandbox/app/runs/w46/loss.png");
+
+  // "~" is that machine's home, asked of it.
+  assert.equal(await handleLink(click({ kind: "file", raw: "~/shots/ndcg.png", path: null })), "handled");
+  await cx.settle();
+  win = world.overlays.at(-1);
+  assert.equal(win.props.path, "/home/sandbox/shots/ndcg.png");
+  const asked = world.execs.find(([cmd, args]) => cmd === "/bin/sh" && args[1].includes('"$HOME"'));
+  assert.equal(asked[2].on, "studio");
+});
+
+test("a clicked path that isn't a file there says so, and the click is still ours", async () => {
+  host({ wc: "" });
+  world.window = { platform: "macos", active: true };
+  world.terminals = [{ address: "studio/t6", labels: {} }];
+  const { cx } = await watcher();
+  whileItSleeps(() => cx.tick());
+  const shown = world.overlays.length;
+  assert.equal(await handleLink(click({ kind: "file", raw: "runs/w46/gone.png", path: null })), "handled");
+  await cx.settle();
+  assert.equal(world.overlays.length, shown);
+  assert.equal(world.notes.at(-1).title, "Couldn't open gone.png");
+  assert.match(world.notes.at(-1).body, /isn't a file on studio/);
+
+  // The same without a watcher: link.js says it.
+  Object.assign(_state, { owner: null, beat: 0, inbox: [] });
+  host({ wc: "" });
+  assert.equal(await handleLink(click({ kind: "file", raw: "runs/w46/gone.png", path: null })), "handled");
+  assert.equal(world.notes.at(-1).title, "Couldn't open gone.png");
+});
+
+test("the mouse's side buttons step through the gallery's images, over the gallery or the viewer", async () => {
+  host();
+  world.terminals = [{ address: "t4", cwd: "/home/me", labels: {} }];
+  world.screen = "/tmp/shots/a.png\n/tmp/notes.md\n/tmp/shots/b.png";
+  world.present = new Set(["/tmp/shots/a.png", "/tmp/notes.md", "/tmp/shots/b.png"]);
+  _state.shown = null;
+  const { g, cx } = await gallery("t4");
+  world.exec = async (cmd, args) => {
+    if (cmd === "/bin/sh" && args[1].includes("wc -c")) return { code: 0, stdout: "33\n", stderr: "" };
+    if (cmd === "/bin/cp") disk.set(args.at(-1), png(800, 600));
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const press = async (copy, id, button, pcx) => {
+    world.props = copy.props;
+    byId(copy.view.render(), id).handlers[`on_mouse_down:${button}`]({}, pcx);
+    await pcx.settle();
+    return world.overlays.at(-1);
+  };
+  // The viewer a window opens, as Herdr starts it.
+  const view = (win) => {
+    const copy = { props: { ...win.props, overlay: "o8" }, view: new RemoteOpen() };
+    world.props = copy.props;
+    copy.view.init(copy.props, cx);
+    return copy;
+  };
+  const tiles = { props: world.props, view: g };
+
+  // Nothing shown yet: forward is the first image.
+  let win = await press(tiles, "ro-gallery", "forward", cx);
+  assert.equal(win.props.name, "a.png");
+  let viewer = view(win);
+  // Over the gallery again: the one after it, past the markdown file.
+  win = await press(tiles, "ro-gallery", "forward", cx);
+  assert.equal(win.props.name, "b.png");
+  assert.deepEqual(win.props.set, { paths: ["/tmp/shots/a.png", "/tmp/shots/b.png"], at: 1 });
+  viewer = view(win);
+  // Over the viewer: back to the first, and no further.
+  win = await press(viewer, "ro-viewer", "back", cx);
+  assert.equal(win.props.name, "a.png");
+  viewer = view(win);
+  const opened = world.overlays.length;
+  await press(viewer, "ro-viewer", "back", cx);
+  await press(tiles, "ro-gallery", "back", cx);
+  assert.equal(world.overlays.length, opened);
 });

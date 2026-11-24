@@ -140,8 +140,10 @@ async function end(sock, target = "herdr") {
 // Forwards that outlived a reload or a restart of Herdr are picked up again; dead ones are ended
 // and dropped, and so is any socket with no record. Every copy shares one load, but a copy that
 // closes mid-load leaves its calls unsettled, so a load not done in 20 s is started again.
-export function loadForwards() {
-  if (fw.load && (fw.load.done || Date.now() - fw.load.at < 20_000)) return fw.load.p;
+// `fresh` reads the records again even after a load that finished: the list of forwards asks
+// that when it opens, and so does link.js, whose list may not be the watcher's.
+export function loadForwards(fresh = false) {
+  if (fw.load && (fw.load.done ? !fresh : Date.now() - fw.load.at < 20_000)) return fw.load.p;
   const run = { at: Date.now(), done: false, p: null };
   run.p = (async () => {
     let saved = [];
@@ -162,8 +164,9 @@ export function loadForwards() {
       const port = Number(name.match(/^(\d+)\.sock$/)?.[1]);
       if (port && !ports.has(port)) await end(`${sockDir()}/${name}`);
     }
-    // Forwards started while this ran stay.
-    fw.list = [...kept.filter((r) => !fw.list.some((x) => x.port === r.port)), ...fw.list];
+    // Forwards started while this ran stay; older ones the file no longer has were stopped.
+    const since = fw.list.filter((r) => r.started >= run.at || fw.busy.has(r.port));
+    fw.list = [...kept.filter((r) => !since.some((x) => x.port === r.port)), ...since];
     await save();
   })()
     .catch(() => {})
@@ -390,17 +393,18 @@ export async function openFile(machine, path, extra = {}) {
 }
 
 // A page opens in the browser here. One on the other machine's localhost, or a sign-in whose
-// redirect goes back there, gets its port forwarded first.
+// redirect goes back there, gets its port forwarded first. `cx` is a copy's, or link.js's
+// stand-in with the two calls used here, `open_url` and `sleep`.
 export async function openWeb(machine, url, cx) {
   const lb = machine ? m.loopbackTarget(url) : null;
   if (!lb) {
-    cx.open_url(url);
+    await cx.open_url(url);
     return;
   }
   const target = await sshTarget(machine);
   if (!target) {
     notify({ title: "Couldn't forward the link", body: `${machine} has no ssh address in Herdr, so port ${lb.port} can't come to this Mac. Opened it anyway.`, level: "error" });
-    cx.open_url(url);
+    await cx.open_url(url);
     return;
   }
   const r = await ensureForward({ machine, target, port: lb.port, host: lb.host, auth: lb.auth }, (ms) => cx.sleep(ms));
@@ -408,12 +412,90 @@ export async function openWeb(machine, url, cx) {
     notify({ title: "Couldn't open the link", body: r.error, level: "error" });
     return;
   }
-  cx.open_url(url);
+  await cx.open_url(url);
   notify(
     lb.auth
       ? { title: "Sign-in opened here", body: `Port ${lb.port} on ${machine} comes to this Mac for ${m.AUTH_SECONDS / 60} minutes, so the sign-in can finish there.`, level: "info", timeout: 6000 }
       : { title: `Opened :${lb.port} from ${machine}`, body: r.reused ? "Using the forward that was already up." : "The port stays forwarded until you stop it.", level: "info", timeout: 5000 },
   );
+}
+
+// A file's absolute path on its machine: "~/…" is under that machine's home, which only it knows.
+const HOME = 'printf "%s\\n" "$HOME"';
+async function expandHome(machine, path) {
+  if (!path.startsWith("~/")) return path;
+  const r = await exec("/bin/sh", ["-c", HOME, "sh"], machine ? { on: machine, timeout: 10_000 } : { timeout: 10_000 }).catch(() => null);
+  const dir = r?.code === 0 ? r.stdout.trim() : "";
+  if (!dir.startsWith("/") || m.hasControl(dir)) throw new Error(`Couldn't find your home folder${machine ? ` on ${machine}` : ""}.`);
+  return m.normalize(`${dir}/${path.slice(2)}`);
+}
+
+// What the menu or a ⌘-click asked for (model.linkTarget): a page, or a file on its machine.
+export async function openTarget(t, cx) {
+  if (t.kind === "web") return openWeb(t.machine, t.url, cx);
+  return openFile(t.machine, await expandHome(t.machine, t.path));
+}
+
+export const targetName = (t) => (t.kind === "web" ? "the link" : m.baseName(t.path));
+
+// ---------------------------------------------------------------------------
+// ⌘-clicks waiting for the watcher (model.CLICKS says why they wait in localStorage). Without a
+// localStorage there is nowhere to wait, and link.js does every click itself.
+
+const store = () => {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage;
+  } catch {
+    return null;
+  }
+};
+const waiting = (st) => m.parseClicks(st.getItem(m.CLICKS));
+const keep = (st, list) => (list.length ? st.setItem(m.CLICKS, JSON.stringify(list)) : st.removeItem(m.CLICKS));
+let clicks = 0;
+
+// Leaves a click for the watcher. Returns its id, or null when it couldn't be left.
+export function queueClick(target) {
+  const st = store();
+  if (!st) return null;
+  const now = Date.now();
+  const id = `${now.toString(36)}-${(clicks++).toString(36)}-${Math.floor(Math.random() * 0x1000000).toString(36)}`;
+  try {
+    // Ones nobody took in a minute were left by a handler that ended early.
+    keep(st, [...waiting(st).filter((j) => now - j.at < 60_000), { ...target, id, at: now }]);
+    return waiting(st).some((j) => j.id === id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether the watcher has yet to take a click.
+export function clickWaiting(id) {
+  const st = store();
+  return Boolean(st) && waiting(st).some((j) => j.id === id);
+}
+
+// Takes a click back. True when it was still there, so it's link.js's to do.
+export function dropClick(id) {
+  const st = store();
+  if (!st) return true;
+  const list = waiting(st);
+  if (!list.some((j) => j.id === id)) return false;
+  keep(st, list.filter((j) => j.id !== id));
+  return true;
+}
+
+// Every waiting click, for the watcher: taken off as it reads them.
+export function takeClicks() {
+  const st = store();
+  if (!st) return [];
+  try {
+    if (st.getItem(m.CLICKS) === null) return [];
+    const list = waiting(st);
+    st.removeItem(m.CLICKS);
+    return list;
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------

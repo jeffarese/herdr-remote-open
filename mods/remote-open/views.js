@@ -13,6 +13,9 @@ const chrome = (name) => `mods/workspace-chrome/${name}.svg`;
 
 const stop = (el) => el.on_mouse_down("left", (_e, cx) => cx.stop_propagation());
 
+// The mouse's side buttons, anywhere over a window: back is the previous image, forward the next.
+const sideButtons = (el, step) => el.on_mouse_down("back", (_e, cx) => step(-1, cx)).on_mouse_down("forward", (_e, cx) => step(1, cx));
+
 function button(t, id, name, tip, onClick, label) {
   return stop(
     h_flex()
@@ -77,8 +80,8 @@ export function viewer(ui) {
     )
     .when(Boolean(set), (el) =>
       el
-        .child(button(t, "ro-prev", "prev", "Previous image (←)", (cx) => ui.act.step(-1, cx)))
-        .child(button(t, "ro-next", "next", "Next image (→)", (cx) => ui.act.step(1, cx))),
+        .child(button(t, "ro-prev", "prev", "Previous image (←, or the mouse's back button)", (cx) => ui.act.step(-1, cx)))
+        .child(button(t, "ro-next", "next", "Next image (→, or the mouse's forward button)", (cx) => ui.act.step(1, cx))),
     )
     .child(button(t, "ro-fit", ui.fit ? null : "fit", ui.fit ? "Actual size (1:1)" : "Fit to the window", (cx) => ui.act.toggleFit(cx), ui.fit ? "1:1" : null))
     .child(button(t, "ro-copy", "copy", "Copy image", (cx) => ui.act.copy(cx)))
@@ -96,14 +99,17 @@ export function viewer(ui) {
     .on_size_change((size, cx) => ui.act.size(size, cx))
     .child(h_flex().id("ro-pic").when(ui.fit, (el) => el.size_full()).p(8).items_center().justify_center().child(pic));
 
-  return v_flex()
-    .id("ro-viewer")
-    .size_full()
-    .bg(t.background)
-    .text_color(t.foreground)
-    .text_size(12.5)
-    .track_focus(ui.handle)
-    .on_key_down((e, cx) => ui.act.key(e, cx))
+  return sideButtons(
+    v_flex()
+      .id("ro-viewer")
+      .size_full()
+      .bg(t.background)
+      .text_color(t.foreground)
+      .text_size(12.5)
+      .track_focus(ui.handle)
+      .on_key_down((e, cx) => ui.act.key(e, cx)),
+    (d, cx) => ui.act.step(d, cx),
+  )
     .child(bar)
     .child(body);
 }
@@ -294,14 +300,17 @@ export function gallery(ui) {
       : div().p(18).text_size(12.5).text_color(t.dim).child(ui.empty ?? ""),
   );
 
-  return v_flex()
-    .id("ro-gallery")
-    .size_full()
-    .bg(t.background)
-    .text_color(t.foreground)
-    .text_size(12.5)
-    .track_focus(ui.handle)
-    .on_key_down((e, cx) => ui.act.key(e, cx))
+  return sideButtons(
+    v_flex()
+      .id("ro-gallery")
+      .size_full()
+      .bg(t.background)
+      .text_color(t.foreground)
+      .text_size(12.5)
+      .track_focus(ui.handle)
+      .on_key_down((e, cx) => ui.act.key(e, cx)),
+    (d, cx) => ui.act.step(d, cx),
+  )
     .child(bar)
     .child(body);
 }
