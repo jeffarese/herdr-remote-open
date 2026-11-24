@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **⌘-click.** In a pane on another machine, ⌘-clicking a `localhost` link or a sign-in link
+  forwards its port and opens it here, and ⌘-clicking the path of an image, a markdown file, a
+  PDF or a text file copies it over and shows it, as `herdr-open` would. Before, the localhost
+  link opened this Mac's own localhost and the path did nothing. Clicks in this Mac's own
+  terminals, ordinary links and other files stay Herdr's. Needs Herdr 0.1.17; `install.sh` adds
+  `remote-open` to your layouts' `link_handlers`.
+- The command palette has **Forwarded ports** and **Images in this terminal** (Herdr 0.1.18).
+- The mouse's back and forward buttons step through the gallery's images, over the viewer or the
+  gallery (Herdr 0.1.18).
+- The list of forwarded ports checks each forward when it opens, so one that died isn't listed.
 - **All images.** The right-click menu has an **All images…** row with how many images and
   markdown files the terminal's screen shows. It opens a window of tiles of every one, in the
   order printed, adding the ones further back in a shell's history. A tile opens the viewer, and

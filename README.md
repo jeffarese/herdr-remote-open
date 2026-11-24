@@ -6,7 +6,8 @@ Run `claude /login`, `gcloud auth login` or an MCP server's sign-in in a Herdr p
 machine, and the sign-in page opens in this Mac's browser. Its callback port is forwarded back
 over ssh, so the sign-in finishes on the machine that asked. A dev server's
 `http://localhost:5173` opens here the same way, and an image a program opens, or one it printed,
-comes up in a floating Herdr window.
+comes up in a floating Herdr window. ⌘-click a localhost link or a file's path in one of those
+panes and the same happens.
 
 ![The Remote open viewer floating in the middle of a Herdr window, titled loss.png, studio, 920×540, with a chart of the ranking model's training and validation loss over the first 12 of 20 epochs, made on studio; the rest of the window is dimmed. Behind it, studio's Claude Code agent "Train the ranking model" (Fable 5.2, max effort), under a pane header with its model, context and limits. Left, the Sessions sidebar: this computer's agents and shells by state, then studio's two agents, and attic unavailable. Right, pull requests by check state, the system stats, and the servers running. Bottom right, two toasts: "Fix the flaky checkout test" finished in 4m 12s, and "Rotate the API signing keys" needs permission. In the status bar, the VPN switch connected to Acme EU. The machines, sessions and pull requests are made up.](preview.png)
 
@@ -30,6 +31,8 @@ a pretend machine on the same Mac, and every session in them is made up
 | A program opens an image: `png jpg jpeg gif webp bmp svg` | Copies it here and shows it in a floating viewer |
 | A program opens a markdown file: `md markdown` | Copies it here and shows it rendered in a floating viewer |
 | A program opens a PDF or a text file: `pdf txt csv json log` | Copies it here and opens it in its Mac app |
+| You ⌘-click a `localhost` link or a sign-in link it printed | Forwards the port as above, then opens the page |
+| You ⌘-click the path of an image, markdown, PDF or text file it printed | Copies it here and shows it, as above |
 | You right-click the terminal | The menu offers the last images and markdown files it printed, one click to view, and **All images…** for every one as tiles |
 
 ## Contents
@@ -46,7 +49,7 @@ a pretend machine on the same Mac, and every session in them is made up
 
 ## Install
 
-You need the Herdr app with machines added over ssh (`hc machine ls` lists them), `python3` here,
+You need the Herdr app, 0.1.18 or newer, with machines added over ssh (`hc machine ls` lists them), `python3` here,
 and ssh from this Mac to each machine that never asks a question: your key in the agent or the
 Keychain, the host key in `known_hosts`. Check with `ssh -o BatchMode=yes <target> true`.
 
@@ -56,13 +59,15 @@ sh scripts/machines.sh install studio attic  # herdr-open on those machines (or 
 ```
 
 **`install.sh`** checks the mod with `herdr-app check`, copies `mods/remote-open` into
-`~/.config/herdr-app/mods`, and adds two things to each of your own layouts, keeping the old file
+`~/.config/herdr-app/mods`, and adds three things to each of your own layouts, keeping the old file
 as `<layout>.json.before-remote-open`:
 
 - a floating block, `remote-open`, that watches for requests. It draws nothing until a port is
   forwarded;
 - `"terminal_menu": "remote-open"`, the right-click menu with images. It has Herdr's own pane items
-  too, so nothing is lost.
+  too, so nothing is lost;
+- `remote-open` in `"link_handlers"`, so ⌘-clicks in terminals reach it. It goes first, and passes
+  on every click that isn't its own.
 
 Herdr's own layouts are never edited, and a layout that already names another terminal menu keeps
 it. Run it again to update; Herdr reloads the mod by itself. To add it to some layouts only:
@@ -105,20 +110,35 @@ helpers) gets the port forwarded until you stop it. To open one yourself from th
 herdr-open http://localhost:5173
 ```
 
+**Click what it printed.** ⌘-click a link or a path in a pane on another machine:
+
+| You ⌘-click | It does |
+| --- | --- |
+| `http://localhost:5173` (or `127.0.0.1`, `[::1]`), port 1024 or above | Forwards the port until you stop it, then opens the page |
+| A sign-in link whose redirect goes to that machine's localhost | Forwards the callback port for 10 minutes, then opens the page |
+| `runs/w46/loss.png`, `~/shots/a.png`, `/tmp/chart.svg` | Copies the image here and shows it in the viewer |
+| `docs/plan.md`, `notes.md:12`, `README.md#L5` | Shows the markdown rendered; the line isn't used |
+| `report.pdf`, `out.csv`, `app.log:88` | Copies it here and opens it in its Mac app |
+
+A relative path is looked up in the pane's current folder on that machine. Every other click stays
+Herdr's: any link or path in this Mac's own terminals, ordinary web links, other kinds of file.
+
 **See an image.** A program that opens an image (`xdg-open chart.png`, Python's `webbrowser`, or
-`herdr-open chart.png`) shows it in the floating viewer. For one a program only printed, right-click
-the terminal: the menu lists the four newest images and markdown files on its screen that exist on
-that machine, macOS screenshots with spaces in their names too. In a pane that sends right-clicks
-to its program, as Claude Code's fullscreen view does, Shift+right-click.
+`herdr-open chart.png`) shows it in the floating viewer. For one a program only printed, ⌘-click
+its path, or right-click the terminal: the menu lists the four newest images and markdown files
+on its screen that exist on that machine, macOS screenshots with spaces in their names too. In a
+pane that sends right-clicks to its program, as Claude Code's fullscreen view does,
+Shift+right-click.
 
 **See them all.** The menu's **All images…** shows how many the screen has and opens a window of
 tiles: every image and markdown file the terminal printed, in the order it printed them. It shows
 the screen's at once, then adds the ones further back in a shell's history. Click a tile to open
-it in the viewer, then ← and → step through the rest. The key command `remote-open:gallery` opens
-it for the focused terminal, without the menu.
+it in the viewer, then ← and → step through the rest, and so do the mouse's back and forward
+buttons, over the viewer or the gallery. The command palette's **Images in this terminal** opens
+it for the focused terminal without the menu, and so does the key command `remote-open:gallery`.
 
 **Read a markdown file.** The same goes for `.md` and `.markdown`: an agent's `Write(…/notes.md)`
-on screen is one right-click away. It opens rendered in its own floating window, with text you
+on screen is one ⌘-click or right-click away. It opens rendered in its own floating window, with text you
 can select, **Copy** (the markdown source), **Save** to Downloads, **Open in its app** and Esc to
 close. Web links open in the browser; links to other files don't. A file over 2 MB opens in its Mac
 app instead.
@@ -138,7 +158,7 @@ size in pixels.
 | Copy | Put the image on the clipboard, to paste into Slack, Mail, Notes |
 | Save | Copy it to `~/Downloads`, as `shot (2).png` when the name is taken; never replaces a file |
 | Open | Open it in its Mac app, usually Preview, to annotate or crop |
-| ‹ › (← →) | The gallery's previous or next image, when opened from the gallery |
+| ‹ › (← →, or the mouse's back and forward buttons) | The gallery's previous or next image, when opened from the gallery |
 | × (Esc) | Close it |
 
 A new image replaces the one shown. Key commands, for `keys.json`: `remote-open:close`,
@@ -147,7 +167,7 @@ A new image replaces the one shown. Key commands, for `keys.json`: `remote-open:
 
 **Forwards.** While a port is forwarded, a chip floats at the bottom of the window:
 `⇄ :8085 studio`, or `⇄ 3 forwards`. Click it to see each one with its time left, open it, or stop
-it. The command palette's **Remote open** (`mod.open`) shows the same list. Forwards outlive mod
+it. The command palette's **Forwarded ports** shows the same list. Forwards outlive mod
 reloads and Herdr restarts; at start the mod finds them again and drops the dead ones.
 
 ## How it works
@@ -184,6 +204,15 @@ a Mac that answers in that last moment either stands down or is the one that ope
 A Mac name is its host name plus a tag made once per install, in case two share a name. Labels
 left behind (a herdr-open that was killed) are swept after two minutes.
 
+**⌘-clicks.** Herdr offers a mod the links and paths it detects in a terminal (`link_handlers` in
+`mod.json` says which: localhost and sign-in links, and paths ending in a type remote-open opens).
+`link.js` passes on every click from this Mac's own terminals and every one that isn't a
+forwardable page or an openable file, and Herdr opens those as it always did. One it keeps is
+left for the watcher, which does the same as for a request: Herdr runs a link handler without a
+view, and the watcher is the copy that holds the forwards. In a layout without the watcher,
+`link.js` waits a second for one and then does it itself. Only the Mac you clicked on acts, so
+there is no election.
+
 **Forwards.** `ssh -f -M -S <socket> -L 127.0.0.1:PORT:localhost:PORT <target>`, to the ssh target
 Herdr itself uses for that machine (`hc machine ls`). `BatchMode=yes` and `ExitOnForwardFailure=yes`,
 so it fails instead of asking or half-working. A sign-in's forward runs `sleep 600` on the other side
@@ -211,6 +240,9 @@ its tile is made.
 | **Port … is already in use on this Mac** | Something here listens on that port, so the redirect would reach it. Stop it and open the link again. |
 | **… forwards to studio. Stop that forward first.** | The same port is forwarded from another machine. Stop it from the chip. |
 | **… has no ssh address in Herdr** | The machine is reached through `--via`, so there's no ssh target to forward with. Pages open without a forward. |
+| A ⌘-click on a path does nothing | Herdr didn't see a path there (a bare `chart.png` without a folder isn't one: print `./chart.png`), or the layout's `link_handlers` doesn't name `remote-open`: run `./install.sh` again. `herdr-app status` shows a handler's error. |
+| A ⌘-click on a localhost link opens this Mac's own localhost | The pane is this Mac's, the link has no port, or the port is below 1024: those stay Herdr's. |
+| **… isn't a file on studio any more** | The path was printed relative to another folder than the pane's current one. `cd` there, or click an absolute path. |
 | The right-click menu has no images or markdown files | Only paths on the terminal's screen count, and only files that exist on that machine. **All images…** also looks back through a shell's history, but a fullscreen program such as Claude Code keeps none, so scroll its view to the paths first. For an older one, run `herdr-open <path>` there. Agents' collapsed tool output isn't on screen. |
 | A plain right-click in a Claude Code pane shows Claude's menu | Its fullscreen view takes the mouse. Shift+right-click, or bind `remote-open:gallery` to a key. |
 | The gallery's tiles stay empty | Herdr doesn't draw newly loaded pictures while the Mac's screen is locked. They show once it's unlocked. |
@@ -218,9 +250,10 @@ its tile is made.
 
 ## Limits
 
-- **⌘-click isn't caught.** Herdr gives mods no hook for clicks on terminal text, so a printed link
-  or path you ⌘-click is still Herdr's. Right-click for images and markdown; for a printed localhost link, run
-  `herdr-open <url>` there.
+- **⌘-clicks need Herdr 0.1.17**, where mods first got them, and reach remote-open only for what
+  Herdr itself takes for a link or a path: a bare file name without a folder isn't one. A
+  relative path is resolved against the pane's current folder, which a program may have left.
+  Clicks in this Mac's own terminals are never taken.
 - **On macOS, only programs that read `BROWSER`** reach herdr-open: Python's `webbrowser`, `gh`,
   `gcloud`, many Node CLIs. Programs that call `/usr/bin/open` directly still open on that Mac.
   `herdr-open` always works. On Linux, `xdg-open` is covered too.
@@ -240,6 +273,8 @@ its tile is made.
   put a request on a terminal. The most it gets is a page in your browser, a forwarded port, and a
   copied image, markdown, PDF or text file opened in its Mac app. Only `http`/`https` pages open. Nothing that
   can run is copied (apps, scripts, `.command`, `.html`), and copies carry the quarantine flag.
+  A ⌘-click gets the same and no more, and only when you click: a program can print a link that
+  forwards a port, but can't click it.
 - **Forwards** listen on `127.0.0.1` only, from port 1024 up. While one runs, that port on this Mac
   reaches the other machine: if a service of yours that uses the port is down, its clients would
   reach the other machine instead. That's why sign-in forwards end after 10 minutes, a page can't
@@ -273,9 +308,10 @@ npm run check   # shellcheck, herdr-app check, then the tests
 
 | Path | What it is |
 | --- | --- |
-| `mods/remote-open/main.js` | The five copies (watcher, menu, image viewer, markdown viewer, forwards list) and the election |
+| `mods/remote-open/main.js` | The six copies (watcher, menu, image viewer, markdown viewer, gallery, forwards list) and the election |
+| `mods/remote-open/link.js` | The ⌘-click handler: which clicks are ours, handed to the watcher |
 | `mods/remote-open/host.js` | Everything that touches this Mac: forwards, copies, the viewer's buttons |
-| `mods/remote-open/model.js` | Pure logic: requests, loopback detection, bids, image headers, paths |
+| `mods/remote-open/model.js` | Pure logic: requests, clicks, loopback detection, bids, image headers, paths |
 | `mods/remote-open/views.js` | What's drawn |
 | `remote/herdr-open`, `remote/setup.sh` | What goes on the other machines |
 | `scripts/` | Installers |

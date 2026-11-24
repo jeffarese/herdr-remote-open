@@ -4,8 +4,9 @@ Pages, sign-ins and images that programs on the person's other machines open com
 they're using. A sign-in whose callback is on that machine's localhost gets its port forwarded
 back over ssh, so it finishes there. A localhost dev server opens here the same way. An image
 shows in a floating Herdr window, and the terminal's right-click menu offers the images the
-terminal printed, and a gallery of all of them. Nothing shows until a port is forwarded; then a small chip floats at the bottom
-of the window.
+terminal printed, and a gallery of all of them. A ⌘-click on a localhost link or a file's path in
+another machine's terminal does the same as the program opening it. Nothing shows until a port is
+forwarded; then a small chip floats at the bottom of the window.
 
 ![Remote open](preview.png)
 
@@ -35,7 +36,8 @@ Every color comes from `theme()`. Icons are 24-unit stroke SVGs (lucide style, 2
     A note replaces that text for 2.5 s after a button (`Copied to the clipboard`,
     `Saved to Downloads as shot (2).png`).
   - At the right, 24 px buttons, radius 6, `muted`, `hover` + `foreground` on hover: from the
-    gallery only, **prev** and **next** (tooltips "Previous image (←)", "Next image (→)"); **1:1** as
+    gallery only, **prev** and **next** (tooltips "Previous image (←, or the mouse's back
+    button)", "Next image (→, or the mouse's forward button)"); **1:1** as
     a text label while fitted, the `fit` icon at actual size; **copy**; **download**
     (Save to Downloads); **external** (Open in its app); **x** (Close).
   - The body on `canvas` (falling back to `background`), 8 px padding, the image centred: fitted
@@ -117,6 +119,34 @@ answered, for as long as their label stays.
   it.
 - Other schemes are left alone.
 
+**⌘-clicks.**
+- `mod.json` has two `link_handlers` rules (Rust regex, searched): `url`,
+  `(?i)^https?://.*(localhost|127\.0\.0\.1|::1|%3A%3A1)`, which lets through every link that
+  could be a localhost page or carry a localhost redirect, encoded or not; and `file`,
+  `(?i)\.(png|jpe?g|gif|webp|bmp|svg|md|markdown|pdf|txt|csv|json|log)$`, the types remote-open
+  opens. A layout's root `"link_handlers": ["remote-open", …]` turns it on.
+- `link.js` exports `handleLink({link, source})` and returns `"pass"` unless `model.linkTarget`
+  says the click is ours: `source.machine` is set (else the machine part of `source.terminal`), and
+  - a `url` link passes `loopbackTarget` (the same test as a request: a localhost page with a
+    port of 1024 or more, or a sign-in with such a redirect); or
+  - a `file` link names a type remote-open opens. Herdr gives `link.path` null for another
+    machine's files, so the path is `link.raw`: a trailing `:12`, `:12:3`, `:5-12`, `#L5` or
+    `#L5-L12` is taken off when the name doesn't end in a known type with it, `file://` is
+    decoded, a relative path is joined to `source.cwd` (none: pass), and `~/…` is kept for its
+    machine (`/bin/sh -c 'printf "%s\n" "$HOME"'` with `on`).
+- A click that is ours is handed to the watcher: `link.js` appends `{id, at, kind, machine,
+  url | path}` to the JSON list in `localStorage["clicks"]`. Herdr runs a link handler without a
+  view (no `cx`: no timers, no `cx.open_url`) and shares `localStorage` between it and the mod's
+  copies without props, which the watcher is. The watcher on duty takes the list off at each
+  300 ms tick and does each click as it does a request it won (`openWeb`, or `openFile` after
+  expanding `~`), with the same toasts; a failure is a toast, "Couldn't open loss.png".
+- `link.js` looks every 200 ms (`exec("/bin/sleep", ["0.2"])`) whether its click is still there
+  and answers `"handled"` once it's gone. Still there after 1 s, no watcher is in this layout: it
+  takes the click back and does it itself, reading the forwards file again first, opening pages
+  with `/usr/bin/open` and sleeping with `/bin/sleep`. It answers `"handled"` for every click
+  that was ours, failed or not: no other handler can open another machine's file.
+- No election: the click happened on one Mac, and `localStorage` is that Mac's.
+
 **Forwards.**
 - `ssh -f -T -M -S <data/remote-open/cm/PORT.sock> -o BatchMode=yes -o ExitOnForwardFailure=yes
   -o ControlPersist=no -o ConnectTimeout=10 -o ServerAliveInterval=30
@@ -156,7 +186,8 @@ answered, for as long as their label stays.
 **Viewer.**
 - From the gallery, ← and → (and the buttons) open the previous or next of the gallery's images
   in the viewer's place, with the list in its props (`set: {paths, at}`); nothing past either
-  end, and one at a time.
+  end, and one at a time. The mouse's side buttons do the same anywhere over the window
+  (`on_mouse_down("back" | "forward")` on its root).
 - Esc closes it; Space or F switches between fit and 1:1. Key commands `close` and `fit`
   (`nextCommand()`) do the same.
 - Copy runs JXA `osascript` putting an `NSImage` on the general pasteboard.
@@ -200,16 +231,29 @@ answered, for as long as their label stays.
 - A tile opens its file with the same `openFile` as the viewer, from the gallery's own copy
   (the window stays open, so nothing is dropped). An image passes the gallery's images as
   `set`. One at a time.
+- The mouse's side buttons over the gallery step the viewer too: the image before or after the
+  one the viewer opened last (kept in module scope, which every copy shares), or with none of
+  this terminal's shown, the first for forward and the last for back.
 - **refresh** starts again from nothing; a read still running from before is ignored. Esc, and
   the key command `close-gallery`, close it. Closing drops the pictures still being made.
+
+**Palette.** `mod.json`'s `palette` adds two entries in the group "Remote open": **Forwarded
+ports** (`mod.open {name: "remote-open"}`: the forwards list as a dialog) and **Images in this
+terminal** (`remote-open.gallery`, the watcher's key command).
+
+**Forwards list.** Each time it opens it reads the records again and checks every forward
+(`ssh -O check`), so one that died since the watcher started isn't listed.
 
 ## Built from
 
 - **Layout:** a floating block at the root of each of the person's own layouts,
-  `{"id":"remote-open","content":{"mod":"remote-open"},"edge":"bottom","align":"center"}`, and
-  `"terminal_menu": "remote-open"` at the root. `scripts/install.py` adds both, never to Herdr's
-  shipped layouts, and leaves another custom terminal menu alone.
-- **mod.json:** `{"place":"none","title":"Remote open","overlay":{"kind":"dialog","width":270,"height":360}}`.
+  `{"id":"remote-open","content":{"mod":"remote-open"},"edge":"bottom","align":"center"}`,
+  `"terminal_menu": "remote-open"` and `remote-open` in `"link_handlers"` at the root.
+  `scripts/install.py` adds the three, never to Herdr's shipped layouts; it leaves another custom
+  terminal menu alone, and puts `remote-open` first among the link handlers unless it's already
+  listed.
+- **mod.json:** `{"place":"none","title":"Remote open","overlay":{"kind":"dialog","width":270,"height":360}}`,
+  plus `link_handlers` and `palette` (above).
 - **One mod, roles by `props()`:**
   - `{view:"image"}`: the viewer;
   - `{view:"markdown"}`: the markdown viewer;
@@ -220,8 +264,8 @@ answered, for as long as their label stays.
   - any other `tab`: closes itself;
   - none: the watcher, which also takes the key command `gallery`.
 - **Files:** `model.js` (pure: request parsing, loopback and sign-in detection, bids, base64,
-  image headers, path finding, cache names), `host.js` (`exec`, `hc`, `fs/promises`, `net`), `views.js`,
-  `main.js`.
+  image headers, path finding, cache names, which clicks are ours), `host.js` (`exec`, `hc`,
+  `fs/promises`, `net`, `localStorage`), `views.js`, `main.js`, `link.js` (the ⌘-click handler).
 - **herdr:** `terminals`, `panes`, `keys`, `props`, `window`, `run`, `hc`, `exec`, `notify`,
   `openOverlay`, `closeOverlay`, `nextCommand`, `focused`, `checking`, `appHome`, `home`, `theme`.
   `cx.open_url`, `cx.spawn`, `cx.sleep`, `cx.timer.every`, `cx.focus_handle`.
@@ -235,8 +279,17 @@ answered, for as long as their label stays.
 
 ## Watch out
 
-- **Mods can't see clicks on terminal text.** ⌘-clicking a printed path or link is Herdr's. The
-  right-click menu is the closest hook; don't promise "click an image" beyond that.
+- **A link handler has no view.** No `cx`, so no `cx.open_url`, `cx.sleep` or timers; its only
+  documented tie to the mod's copies is `localStorage`, and only to copies without props. Hand
+  the work to the watcher there, and keep a way to do it alone (`open` and `sleep` as programs)
+  for a layout without one.
+- **A handler that throws, or fails to load, stops the click with a toast**, also for clicks
+  that weren't ours. `handleLink` decides inside a `try` and passes on anything it can't read.
+  `herdr-app check` only checks that `link.js` exports it.
+- **Herdr gives no path for another machine's file** (`link.path` is null), only the text
+  printed. Bare file names without a folder aren't offered at all.
+- **The link rules are a first sieve**, and they match this Mac's terminals too: `link.js` must
+  pass those on, or ⌘-clicking a local `.md` stops opening your editor.
 - **The runtime's `fs` doesn't reach every folder** (`/private/tmp`, `~/Downloads`). Copy local
   files with `/bin/cp` and save with `cp -n`; `fs` is fine inside `appHome()/data`.
 - **macOS's `base64` takes no file argument** (it wants `-i`). Feed it stdin, which every
