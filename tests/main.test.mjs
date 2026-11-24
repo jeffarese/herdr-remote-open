@@ -761,3 +761,159 @@ test("the mouse's side buttons step through the gallery's images, over the galle
   await press(tiles, "ro-gallery", "back", cx);
   assert.equal(world.overlays.length, opened);
 });
+
+// ---------------------------------------------------------------------------
+// Forwards: the watcher's checks
+
+const pageForward = (port) => ({ machine: "studio", target: "studio-sandbox", port, host: "localhost", auth: false });
+const nap = () => new Promise((r) => setTimeout(r, 1));
+// A check in the same millisecond as a forward's start counts it as one starting, and a stop then
+// as before it: what happens next happens later.
+const later = () => new Promise((r) => setTimeout(r, 10));
+const recordsOnDisk = () => JSON.parse(disk.get([...disk.keys()].find((k) => k.endsWith("/forwards.json"))));
+
+// netstat as this Mac prints it: each forward's ssh listening on its port, and a connection open
+// through each port in world.inUse. `ssh -O check` fails for the sockets in world.deadSocks. No
+// forwards left from other tests.
+async function forwardsHost() {
+  host();
+  for (const r of hostjs.forwards()) await hostjs.stopForward(r);
+  world.inUse = new Set();
+  world.deadSocks = new Set();
+  const base = world.exec;
+  world.exec = async (cmd, args, options) => {
+    if (cmd === "/usr/sbin/netstat") {
+      const rows = [
+        ...[...world.inUse].map((p) => `tcp4       0      0  127.0.0.1.${p}         127.0.0.1.61${p}        ESTABLISHED`),
+        ...hostjs.forwards().map((r) => `tcp4       0      0  127.0.0.1.${r.port}         *.*                    LISTEN`),
+      ];
+      return { code: 0, stdout: ["Active Internet connections (including servers)", "Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)", ...rows, ""].join("\n"), stderr: "" };
+    }
+    if (cmd === "/usr/bin/ssh" && args[3] === "check" && world.deadSocks.has(args[1])) return { code: 255, stdout: "", stderr: "Control socket connect: No such file or directory" };
+    return base(cmd, args, options);
+  };
+}
+
+test("a page's forward that nothing uses for five minutes stops by itself, with a toast", async () => {
+  await forwardsHost();
+  const { record } = await hostjs.ensureForward(pageForward(5190), nap);
+  const t0 = Date.now();
+  let checks = 0;
+  while (hostjs.forwards().some((r) => r.port === 5190) && checks < 40) await hostjs.checkForwards(t0 + ++checks * m.CHECK_MS);
+  assert.equal(checks, m.IDLE_MS / m.CHECK_MS, "five minutes of checks, not one fewer");
+  assert.ok(world.execs.some(([cmd, args]) => cmd === "/usr/bin/ssh" && args.includes("exit") && args[1] === record.sock), "its ssh was told to exit");
+  assert.equal(world.notes.at(-1).title, "Stopped :5190 from studio");
+  assert.match(world.notes.at(-1).body, /Nothing used it for 5 minutes/);
+  assert.equal(recordsOnDisk().some((r) => r.port === 5190), false);
+});
+
+test("a page's forward with a connection open through it stays, and the list says how it stands", async () => {
+  await forwardsHost();
+  world.inUse.add(5191);
+  await hostjs.ensureForward(pageForward(5191), nap);
+  world.props = { view: "forwards", overlay: "o5" };
+  const cx = makeCx();
+  const list = new RemoteOpen();
+  list.init(world.props, cx);
+  await cx.settle();
+  const t0 = Date.now();
+  for (let i = 1; i <= 30; i++) await hostjs.checkForwards(t0 + i * m.CHECK_MS);
+  const rec = hostjs.forwards().find((r) => r.port === 5191);
+  assert.ok(rec, "still forwarded after ten minutes in use");
+  assert.match(text(byId(list.render(), "fw-5191")), /studio · in use/);
+  // Its tab closed: two minutes on, the list counts down.
+  world.inUse.delete(5191);
+  for (let i = 31; i <= 36; i++) await hostjs.checkForwards(t0 + i * m.CHECK_MS);
+  assert.match(text(byId(list.render(), "fw-5191")), /studio · unused, stops in 3 min/);
+  // Opened again: in use from now.
+  const again = await hostjs.ensureForward(pageForward(5191), nap);
+  assert.equal(again.reused, true);
+  assert.match(text(byId(list.render(), "fw-5191")), /studio · in use/);
+  await hostjs.stopForward(rec);
+});
+
+test("a forward whose ssh ended goes from the chip at the next check, in every window's chip", async () => {
+  await forwardsHost();
+  world.terminals = [];
+  const { w: a, cx: acx } = await watcher();
+  await acx.tick();
+  // A second copy of the same build, not the one on duty.
+  const bcx = makeCx();
+  const b = new RemoteOpen();
+  b.init({}, bcx);
+  await bcx.settle();
+  const { record } = await hostjs.ensureForward(pageForward(5192), nap);
+  await acx.tick();
+  await bcx.tick();
+  assert.match(text(a.render()), /:5192 studio/);
+  assert.match(text(b.render()), /:5192 studio/);
+  // The other machine slept, or the network changed: ssh gave up and took its socket with it.
+  world.deadSocks.add(record.sock);
+  await later();
+  a.checked = 0;
+  await acx.tick();
+  assert.equal(hostjs.forwards().some((r) => r.port === 5192), false);
+  const drawn = bcx.notified;
+  await bcx.tick();
+  assert.ok(bcx.notified > drawn, "the copy not on duty draws its chip again");
+  assert.ok(byId(b.render(), "ro-idle"));
+  assert.ok(byId(a.render(), "ro-idle"));
+});
+
+test("a forward another copy of the mod stopped goes from the chip at the next check", async () => {
+  await forwardsHost();
+  await hostjs.ensureForward(pageForward(5194), nap);
+  // link.js, or a copy of an older build, stopped it: the records file no longer has it.
+  const file = [...disk.keys()].find((k) => k.endsWith("/forwards.json"));
+  disk.set(file, `${JSON.stringify(recordsOnDisk().filter((r) => r.port !== 5194), null, 1)}\n`);
+  await later();
+  await hostjs.checkForwards();
+  assert.equal(hostjs.forwards().some((r) => r.port === 5194), false);
+});
+
+test("a forward stopped while the records are being read isn't brought back by that read", async () => {
+  await forwardsHost();
+  const { record } = await hostjs.ensureForward(pageForward(5193), nap);
+  let release;
+  const held = new Promise((r) => (release = r));
+  const base = world.exec;
+  world.exec = async (cmd, args, options) => {
+    if (cmd === "/usr/bin/ssh" && args[3] === "check" && args[1] === record.sock) await held;
+    return base(cmd, args, options);
+  };
+  const load = hostjs.loadForwards(true);
+  await later();
+  await hostjs.stopForward(record);
+  release();
+  await load;
+  assert.equal(hostjs.forwards().some((r) => r.port === 5193), false);
+  assert.equal(recordsOnDisk().some((r) => r.port === 5193), false);
+});
+
+test("when netstat can't tell, no forward is stopped", async () => {
+  // It fails, or it answers without the forward's own listener: it can't see those sockets.
+  for (const says of [{ code: 1, stdout: "", stderr: "netstat: sysctl: Operation not permitted" }, { code: 0, stdout: "", stderr: "" }]) {
+    await forwardsHost();
+    const base = world.exec;
+    world.exec = async (cmd, args, options) => (cmd === "/usr/sbin/netstat" ? says : base(cmd, args, options));
+    const { record } = await hostjs.ensureForward(pageForward(5195), nap);
+    const t0 = Date.now();
+    for (let i = 1; i <= 30; i++) await hostjs.checkForwards(t0 + i * m.CHECK_MS);
+    assert.ok(hostjs.forwards().some((r) => r.port === 5195), JSON.stringify(says));
+    await hostjs.stopForward(record);
+  }
+});
+
+test("a sign-in that reuses a page's forward holds it for the sign-in's ten minutes", async () => {
+  await forwardsHost();
+  const { record } = await hostjs.ensureForward(pageForward(5196), nap);
+  const again = await hostjs.ensureForward({ ...pageForward(5196), auth: true }, nap);
+  assert.equal(again.reused, true);
+  const t0 = Date.now();
+  for (let i = 1; i <= 29; i++) await hostjs.checkForwards(t0 + i * m.CHECK_MS);
+  assert.ok(hostjs.forwards().some((r) => r.port === 5196), "kept through the sign-in, unused");
+  for (let i = 30; i <= 31; i++) await hostjs.checkForwards(t0 + i * m.CHECK_MS);
+  assert.equal(hostjs.forwards().some((r) => r.port === 5196), false, "stopped once its time is up");
+  assert.equal(world.notes.at(-1).title, "Stopped :5196 from studio");
+  assert.equal(record.port, 5196);
+});

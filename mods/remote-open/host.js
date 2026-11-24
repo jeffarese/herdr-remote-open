@@ -105,8 +105,10 @@ export async function listening(port) {
 // Forwards: `ssh -L` processes this mod started, each with its own control socket, so it can
 // check one and end exactly that one. Shared by every copy of the mod. A record is written
 // (`pending`) before its ssh starts, so a copy closing halfway can't leave one nobody lists.
+// `stopped`: when each port's forward was last stopped here. `idle`: how long each page's forward
+// has gone unused, as of the last check.
 
-const fw = { list: [], load: null, version: 0, busy: new Map() };
+const fw = { list: [], load: null, check: null, version: 0, busy: new Map(), stopped: new Map(), idle: new Map() };
 const PENDING_MS = 40_000;
 
 export const forwards = () => fw.list.filter((r) => !r.until || r.until > Date.now());
@@ -146,9 +148,11 @@ export function loadForwards(fresh = false) {
   if (fw.load && (fw.load.done ? !fresh : Date.now() - fw.load.at < 20_000)) return fw.load.p;
   const run = { at: Date.now(), done: false, p: null };
   run.p = (async () => {
+    let text = "";
     let saved = [];
     try {
-      saved = JSON.parse(await fs.readFile(recordsFile(), "utf8"));
+      text = await fs.readFile(recordsFile(), "utf8");
+      saved = JSON.parse(text);
     } catch {
       saved = [];
     }
@@ -164,10 +168,15 @@ export function loadForwards(fresh = false) {
       const port = Number(name.match(/^(\d+)\.sock$/)?.[1]);
       if (port && !ports.has(port)) await end(`${sockDir()}/${name}`);
     }
-    // Forwards started while this ran stay; older ones the file no longer has were stopped.
+    // Forwards started while this ran stay; older ones the file no longer has were stopped, and
+    // so was one stopped here after it started, though the file read had it.
     const since = fw.list.filter((r) => r.started >= run.at || fw.busy.has(r.port));
-    fw.list = [...kept.filter((r) => !since.some((x) => x.port === r.port)), ...since];
-    await save();
+    const stopped = (r) => (fw.stopped.get(r.port) ?? 0) > r.started;
+    const before = JSON.stringify(fw.list);
+    fw.list = [...kept.filter((r) => !stopped(r) && !since.some((x) => x.port === r.port)), ...since];
+    // Written only when it changed: the watcher reads it every CHECK_MS.
+    if (`${JSON.stringify(fw.list, null, 1)}\n` !== text) await save();
+    else if (JSON.stringify(fw.list) !== before) fw.version++;
   })()
     .catch(() => {})
     .finally(() => {
@@ -187,21 +196,74 @@ export function expire() {
   return true;
 }
 
-// Settles records left `pending` by a copy that closed while its ssh started.
-export async function tidy() {
-  for (const r of fw.list.filter((x) => x.pending && Date.now() - x.started >= PENDING_MS && !fw.busy.has(x.port))) {
-    if (await alive(r)) fw.list = fw.list.map((x) => (x === r ? { ...r, pending: false } : x));
-    else {
-      await end(r.sock, r.target);
-      fw.list = fw.list.filter((x) => x !== r);
+// The watcher's check, every CHECK_MS: the records are read again, so a forward that ended
+// (its ssh gone with the network, stopped by another copy of the mod) goes from the chip, and a
+// record left `pending` by a copy that closed is settled. Then each page's forward with no
+// connection open through it adds to its unused time; one unused for IDLE_MS is stopped. When
+// netstat can't tell (it fails, or doesn't show the forward's own listener), nothing is counted. Callers share a check in flight; one not done in a
+// minute (its copy closed) is started again. `now` is for the tests.
+export function checkForwards(now = Date.now()) {
+  if (fw.check && !fw.check.done && Date.now() - fw.check.at < 60_000) return fw.check.p;
+  const run = { at: Date.now(), done: false, p: null };
+  run.p = (async () => {
+    await loadForwards(true);
+    for (const port of fw.idle.keys()) if (!fw.list.some((r) => r.port === port)) fw.idle.delete(port);
+    const pages = fw.list.filter((r) => !r.until && !r.pending);
+    if (!pages.length) return;
+    const r = await exec("/usr/sbin/netstat", ["-an", "-p", "tcp"], { timeout: 10_000 }).catch(() => null);
+    if (r?.code !== 0) return;
+    const { listening, open } = m.loopbackPorts(r.stdout);
+    for (const rec of pages) {
+      if (!listening.has(rec.port)) continue;
+      const old = fw.idle.get(rec.port);
+      const prev = old?.started === rec.started ? old : null;
+      const next = { ...m.idleAfter(prev, open.has(rec.port), now), started: rec.started, hold: prev?.hold ?? 0 };
+      fw.idle.set(rec.port, next);
+      if (next.ms >= m.IDLE_MS && next.hold <= now) await stopUnused(rec);
     }
-    await save();
+  })()
+    .catch(() => {})
+    .finally(() => {
+      run.done = true;
+    });
+  fw.check = run;
+  return run.p;
+}
+
+// Holds the port as an open does, so a link opened this moment either reuses the forward first
+// or waits and starts a new one.
+async function stopUnused(r) {
+  if (fw.busy.has(r.port)) return;
+  fw.busy.set(r.port, Date.now());
+  try {
+    if (fw.list.find((x) => x.port === r.port)?.started !== r.started) return;
+    await stopForward(r);
+  } finally {
+    fw.busy.delete(r.port);
   }
+  notify({ title: `Stopped :${r.port} from ${r.machine}`, body: `Nothing used it for ${m.IDLE_MINUTES} minutes. Open the link again to bring it back.`, level: "info", timeout: 8000 });
+}
+
+// A page's forward is in use again from now: just opened, or opened again. A sign-in that reuses
+// it holds it for the sign-in's time, used or not.
+function used(r, auth = false) {
+  const now = Date.now();
+  const hold = Math.max(fw.idle.get(r.port)?.started === r.started ? fw.idle.get(r.port).hold : 0, auth ? now + m.AUTH_SECONDS * 1000 : 0);
+  fw.idle.set(r.port, { ms: 0, at: now, inUse: true, started: r.started, hold });
+}
+
+// For the list: whether a page's forward was in use at the last check, and how long it has gone
+// unused.
+export function usage(r) {
+  const u = fw.idle.get(r.port);
+  return u && u.started === r.started ? { inUse: u.inUse, idleMs: u.ms } : { inUse: false, idleMs: 0 };
 }
 
 export async function stopForward(r) {
+  fw.stopped.set(r.port, Date.now());
   await end(r.sock, r.target);
   fw.list = fw.list.filter((x) => x.port !== r.port);
+  fw.idle.delete(r.port);
   await save();
 }
 
@@ -210,8 +272,8 @@ export async function stopAll() {
 }
 
 // Port `port` on this Mac, forwarded to `host:port` on `machine`. A sign-in's forward ends by
-// itself after AUTH_SECONDS; a page's stays until it's stopped. The local port is the remote one,
-// since that is the port the link and the sign-in's redirect name. One at a time per port: a
+// itself after AUTH_SECONDS; a page's stays until it's stopped, or unused for IDLE_MS. The local
+// port is the remote one, since that is the port the link and the sign-in's redirect name. One at a time per port: a
 // second request waits for the first (`sleep` is the copy's cx.sleep).
 export async function ensureForward(want, sleep) {
   const { port } = want;
@@ -234,7 +296,10 @@ async function forward({ machine, target, port, host, auth }, sleep) {
   if (cur) {
     if (cur.machine !== machine) return { error: `Port ${port} on this Mac already forwards to ${cur.machine}. Stop that forward first.` };
     // A page's forward serves a sign-in on the same port as well; a new sign-in gets a fresh timer.
-    if (!cur.until) return { record: cur, reused: true };
+    if (!cur.until) {
+      used(cur, auth);
+      return { record: cur, reused: true };
+    }
     await stopForward(cur);
     for (let i = 0; i < 6 && (await listening(port)); i++) await sleep(250); // ssh lets go of it
   }
@@ -281,6 +346,7 @@ async function forward({ machine, target, port, host, auth }, sleep) {
   }
   const up = { ...record, pending: false };
   fw.list = fw.list.map((x) => (x === record ? up : x));
+  if (!auth) used(up);
   await save();
   return { record: up };
 }
@@ -416,7 +482,7 @@ export async function openWeb(machine, url, cx) {
   notify(
     lb.auth
       ? { title: "Sign-in opened here", body: `Port ${lb.port} on ${machine} comes to this Mac for ${m.AUTH_SECONDS / 60} minutes, so the sign-in can finish there.`, level: "info", timeout: 6000 }
-      : { title: `Opened :${lb.port} from ${machine}`, body: r.reused ? "Using the forward that was already up." : "The port stays forwarded until you stop it.", level: "info", timeout: 5000 },
+      : { title: `Opened :${lb.port} from ${machine}`, body: `${r.reused ? "Using the forward that was already up. " : ""}The port stays forwarded while you use it, and stops after ${m.IDLE_MINUTES} minutes unused.`, level: "info", timeout: 5000 },
   );
 }
 

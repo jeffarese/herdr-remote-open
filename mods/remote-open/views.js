@@ -6,7 +6,7 @@
 import { div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, TextView } from "gpui-base";
 import { theme } from "herdr";
-import { fit } from "./model.js";
+import { fit, IDLE_MS } from "./model.js";
 
 const icon = (name) => `mods/remote-open/${name}.svg`;
 const chrome = (name) => `mods/workspace-chrome/${name}.svg`;
@@ -318,10 +318,11 @@ export function gallery(ui) {
 // ---------------------------------------------------------------------------
 // The forwards chip (the floating block; nothing while no port is forwarded) and its list.
 
+// A sign-in's time left; a page's forward in use, or how soon it stops unused.
 const left = (r, now) => {
-  if (!r.until) return "until stopped";
-  const min = Math.max(0, Math.ceil((r.until - now) / 60_000));
-  return `sign-in, ${min} min left`;
+  if (r.until) return `sign-in, ${Math.max(0, Math.ceil((r.until - now) / 60_000))} min left`;
+  if (r.inUse) return "in use";
+  return `unused, stops in ${Math.max(1, Math.ceil((IDLE_MS - (r.idleMs ?? 0)) / 60_000))} min`;
 };
 
 export function chip(ui) {

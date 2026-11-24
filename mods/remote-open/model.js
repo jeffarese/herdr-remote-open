@@ -28,6 +28,12 @@ export const MAX_FILE = 100 * 1024 * 1024;
 
 // How long a sign-in's callback port stays forwarded, in seconds.
 export const AUTH_SECONDS = 600;
+// A page's forward stops once nothing has used it for IDLE_MINUTES: no connection open through
+// it at the watcher's checks, one every CHECK_MS. A tab with a dev server's live reload keeps one
+// open while it's there.
+export const IDLE_MINUTES = 5;
+export const IDLE_MS = IDLE_MINUTES * 60_000;
+export const CHECK_MS = 20_000;
 
 export const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
 const IMAGE_RE = new RegExp(`\\.(${IMAGE_EXTS.join("|")})$`, "i");
@@ -538,4 +544,33 @@ export function galleryCount(tiles) {
   if (images) parts.push(`${images} image${images === 1 ? "" : "s"}`);
   if (notes) parts.push(`${notes} markdown file${notes === 1 ? "" : "s"}`);
   return parts.join(", ");
+}
+
+// ---------------------------------------------------------------------------
+// Whether a forward is in use
+
+// This Mac's loopback ports from `netstat -an -p tcp`: the ones listening, and the ones with a
+// connection open. A forward's ssh listens on its port and holds a connection there for every
+// one through it. Its listener missing means netstat couldn't see it, so it says nothing either way.
+export function loopbackPorts(netstat) {
+  const listening = new Set();
+  const open = new Set();
+  for (const line of String(netstat ?? "").split("\n")) {
+    const cols = line.trim().split(/\s+/);
+    if (!cols[0]?.startsWith("tcp")) continue;
+    const port = Number(cols[3]?.match(/^(?:127\.0\.0\.1|::1)\.(\d+)$/)?.[1]);
+    if (!port) continue;
+    if (cols.at(-1) === "LISTEN") listening.add(port);
+    else if (cols.at(-1) === "ESTABLISHED") open.add(port);
+  }
+  return { listening, open };
+}
+
+// How long a forward has gone unused, after one more check. Each check adds the time since the
+// one before, but at most two checks' worth, so a Mac waking from sleep doesn't find it long
+// unused; a connection seen starts it again from nothing.
+export function idleAfter(prev, inUse, now) {
+  if (inUse) return { ms: 0, at: now, inUse: true };
+  const gap = prev ? Math.min(Math.max(0, now - prev.at), 2 * CHECK_MS) : 0;
+  return { ms: (prev?.ms ?? 0) + gap, at: now, inUse: false };
 }

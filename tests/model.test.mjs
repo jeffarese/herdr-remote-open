@@ -296,3 +296,35 @@ test("mod.json's link rules reach link.js with every click that could be ours", 
   // The palette's own command is one the watcher answers.
   assert.deepEqual(mod.palette.map((p) => p.command), ["mod.open", "remote-open.gallery"]);
 });
+
+test("netstat says which loopback ports listen and which have a connection open", () => {
+  const out = `Active Internet connections (including servers)
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
+tcp4       0      0  127.0.0.1.5173         127.0.0.1.61044        ESTABLISHED
+tcp4       0      0  127.0.0.1.61044        127.0.0.1.5173         ESTABLISHED
+tcp6       0      0  ::1.8080               ::1.52107              ESTABLISHED
+tcp4       0      0  127.0.0.1.3000         *.*                    LISTEN
+tcp4       0      0  127.0.0.1.4000         127.0.0.1.52000        TIME_WAIT
+tcp4       0      0  127.0.0.1.7000         127.0.0.1.52001        CLOSE_WAIT
+tcp4       0      0  192.168.1.4.9000       192.168.1.9.50000      ESTABLISHED
+udp4       0      0  127.0.0.1.6000         *.*
+`;
+  const ports = m.loopbackPorts(out);
+  assert.deepEqual([...ports.open].sort((a, b) => a - b), [5173, 8080, 61044]);
+  assert.deepEqual([...ports.listening], [3000]);
+  assert.deepEqual(m.loopbackPorts(""), { listening: new Set(), open: new Set() });
+  assert.deepEqual(m.loopbackPorts(null), { listening: new Set(), open: new Set() });
+});
+
+test("a forward's unused time grows check by check, at most two checks' worth at once, and a connection resets it", () => {
+  let u = m.idleAfter(null, false, 1000);
+  assert.deepEqual(u, { ms: 0, at: 1000, inUse: false });
+  u = m.idleAfter(u, false, 1000 + m.CHECK_MS);
+  assert.equal(u.ms, m.CHECK_MS);
+  // The Mac slept for an hour: that hour isn't time anyone could have used it.
+  u = m.idleAfter(u, false, u.at + 3_600_000);
+  assert.equal(u.ms, 3 * m.CHECK_MS);
+  u = m.idleAfter(u, true, u.at + m.CHECK_MS);
+  assert.equal(u.ms, 0);
+  assert.equal(u.inUse, true);
+});

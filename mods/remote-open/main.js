@@ -95,12 +95,13 @@ export default class RemoteOpen extends View {
     } else if (this.role === "other-menu") {
       closeOverlay(props()?.overlay);
     } else if (this.role === "forwards") {
-      // Read again each time it opens: a forward that died since isn't listed.
+      // Checked again each time it opens: a forward that died since isn't listed, and each one
+      // says whether it's in use.
       if (!checking()) cx.spawn(async (cx) => {
-        await host.loadForwards(true);
+        await host.checkForwards();
         cx.notify();
       });
-      cx.timer.every(30_000, (cx) => cx.notify());
+      cx.timer.every(10_000, (cx) => cx.notify());
     }
   }
 
@@ -113,7 +114,7 @@ export default class RemoteOpen extends View {
     this.shown = -1;
     this.minute = 0;
     this.swept = 0;
-    this.tidied = Date.now();
+    this.checked = Date.now();
     if (checking()) return;
     cx.spawn(async (cx) => {
       const me = await host.myName();
@@ -153,6 +154,7 @@ export default class RemoteOpen extends View {
   }
 
   tick(cx) {
+    this.redraw(cx);
     // Only a copy that is ready takes the watch, so one stuck starting can't hold it.
     if (!this.armed) return;
     const now = Date.now();
@@ -174,11 +176,15 @@ export default class RemoteOpen extends View {
       this.swept = now;
       this.sweepLabels(cx);
     }
-    if (now - this.tidied > 30_000) {
-      this.tidied = now;
-      cx.spawn(() => host.tidy().catch(() => {}));
+    if (now - this.checked > m.CHECK_MS) {
+      this.checked = now;
+      cx.spawn(() => host.checkForwards().catch(() => {}));
     }
-    const minute = Math.floor(now / 30_000);
+  }
+
+  // Every copy draws its chip again when the forwards change, the one on duty or not.
+  redraw(cx) {
+    const minute = Math.floor(Date.now() / 30_000);
     if (host.expire() || host.forwardsVersion() !== this.shown || (minute !== this.minute && host.forwards().some((r) => r.until))) {
       this.shown = host.forwardsVersion();
       this.minute = minute;
@@ -556,7 +562,7 @@ export default class RemoteOpen extends View {
     if (this.role === "menu") return views.menu({ items: this.items(), at: this.at, handle: this.handle, act: { choose: (i, cx) => this.choose(i, cx), key: (e, cx) => this.menuKey(e, cx) } });
     if (this.role === "forwards")
       return views.forwardsList({
-        forwards: host.forwards(),
+        forwards: host.forwards().map((r) => ({ ...r, ...host.usage(r) })),
         now: Date.now(),
         handle: this.handle,
         act: {
